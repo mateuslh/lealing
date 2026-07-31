@@ -14,7 +14,7 @@ para acomodar centenas de ferramentas sem virar um menu interminável.
 
 ## Instalação
 
-**Em qualquer máquina, sem Go instalado:**
+**macOS e Linux, sem Go instalado:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mateuslh/lealing/main/scripts/install.sh | sh
@@ -40,9 +40,15 @@ fixar deliberadamente uma tag antiga.
 LEALING_BIN_DIR=/usr/local/bin sh install.sh
 ```
 
-No Windows, baixe `lealing_windows_amd64.zip` (ou `_arm64`) da
-[página de releases](https://github.com/mateuslh/lealing/releases) e ponha o
-`lealing.exe` em uma pasta do `PATH`.
+**Windows 10+ com PowerShell:**
+
+```powershell
+irm https://raw.githubusercontent.com/mateuslh/lealing/main/scripts/install.ps1 | iex
+```
+
+O instalador detecta `amd64` ou `arm64`, confere o mesmo `checksums.txt`,
+instala em `%LOCALAPPDATA%\lealing\bin` e acrescenta o diretório ao `PATH` do
+usuário. Sem informar versão, ele também instala sempre a última release.
 
 **Com Go instalado**, sem passar por release nenhuma:
 

@@ -45,6 +45,19 @@ jobs:
       - name: test
         run: go test ./...
 
+      # Além de validar a sintaxe, instala a última release em um diretório
+      # temporário. Isso exercita arquitetura, download, checksum e extração
+      # no PowerShell real do runner Windows.
+      - name: instalador PowerShell
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          LEALING_BIN_DIR: ${{ runner.temp }}/lealing-install-test
+          LEALING_NO_PATH: "1"
+        run: |
+          & ./scripts/install.ps1
+          & "$env:LEALING_BIN_DIR/lealing.exe" -version
+
       # O detector de corrida só num sistema: ele triplica o tempo da suíte, e
       # uma corrida de goroutine não é específica de plataforma.
       - name: race

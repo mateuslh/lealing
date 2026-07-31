@@ -40,7 +40,7 @@ detect_platform() {
     case "$os" in
         Darwin) os=darwin ;;
         Linux)  os=linux ;;
-        *)      die "sistema não suportado por este script: $os (no Windows, baixe o .zip da release)" ;;
+        *)      die "sistema não suportado por este script: $os (no Windows, use scripts/install.ps1)" ;;
     esac
 
     # uname -m fala vários dialetos para a mesma arquitetura.
