@@ -1,0 +1,39 @@
+# Publica os binários quando uma tag `v*` é empurrada.
+#
+#   git tag -a v0.1.0 -m "primeira release" && git push origin v0.1.0
+#
+# O GoReleaser compila macOS, Windows e Linux (amd64 e arm64), gera o
+# checksums.txt e cria a release — que é de onde o install.sh e a tool
+# "Atualizar o lealing" baixam.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # Criar a release e subir os artefatos exige escrita no repositório.
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O GoReleaser monta o changelog a partir do histórico; um clone
+          # raso deixaria a release com as notas vazias.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

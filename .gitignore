@@ -1,0 +1,14 @@
+# binários
+/bin/
+/lealing
+
+# artefatos de release (goreleaser)
+/dist/
+
+# cobertura e perfis
+coverage.out
+*.prof
+*.test
+
+# sistema
+.DS_Store

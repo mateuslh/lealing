@@ -1,0 +1,97 @@
+# Publicação dos binários do lealing.
+#
+# Roda sozinho no GitHub Actions a cada tag `v*` (.github/workflows/release.yml).
+# Para conferir localmente sem publicar nada:
+#
+#   goreleaser release --snapshot --clean
+#
+# O nome dos arquivos é contrato com dois consumidores: o scripts/install.sh e
+# a tool "Atualizar o lealing" (internal/adapter/outbound/selfupdate). Mudar o
+# name_template aqui quebra os dois — se mudar, mude `AssetName` junto.
+version: 2
+
+project_name: lealing
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: lealing
+    main: ./cmd/lealing
+    binary: lealing
+    env:
+      # Sem cgo o binário é estático e cruza plataformas sem toolchain de C.
+      # Nada aqui precisa de libc: os adapters disparam processos.
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      # A versão precisa ser a tag inteira, com o "v": é assim que a tool de
+      # atualização compara o que roda com o que está publicado.
+      - -s -w -X main.version={{ .Tag }}
+    goos:
+      - darwin
+      - windows
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    # Sem a versão no nome: a release já identifica qual é, e um nome estável
+    # deixa o install.sh e o self-update montarem a URL sem consultar a API.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  draft: false
+  # Uma tag como v1.5.0-rc1 sai marcada como pré-lançamento, e a API de
+  # /releases/latest não a devolve — então a tool de atualização não empurra
+  # um candidato para quem está em uma versão estável.
+  prerelease: auto
+  footer: |
+    ---
+
+    Instalação em uma linha:
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/mateuslh/lealing/main/scripts/install.sh | sh
+    ```
+
+    Já tem o lealing? Abra a tool **Atualizar o lealing** ou rode `lealing -update`.
+
+# Descomente quando existir o repositório mateuslh/homebrew-tap: cada release
+# passa a atualizar a fórmula sozinha, e `brew upgrade` basta.
+# brews:
+#   - name: lealing
+#     repository:
+#       owner: mateuslh
+#       name: homebrew-tap
+#     homepage: https://github.com/mateuslh/lealing
+#     description: Centro de comando de tools no terminal
+#     license: MIT
