@@ -3,13 +3,17 @@
 package claudecli
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"os/user"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/mateuslh/lealing/internal/core/ccaccount"
 )
@@ -92,6 +96,21 @@ func (v *Vault) setOrigin(o string) {
 // manual do usuário.
 type keychain struct{ service string }
 
+// securityCmd monta uma chamada ao `security` fora da sessão de terminal.
+//
+// Setsid não é detalhe: com um terminal controlador à mão, o `security`
+// ignora a entrada padrão e vai direto ao /dev/tty pedir digitação — o
+// prompt aparece por cima do frame da TUI e o programa espera para sempre
+// por uma tecla que ninguém vai apertar. Vale para gravar (a senha do item)
+// e para ler ou apagar com o chaveiro trancado (a senha do chaveiro). Sem
+// sessão de terminal, esse caminho não existe: ou ele usa o que mandamos
+// pela entrada padrão, ou falha rápido.
+func securityCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd
+}
+
 // account resolve a conta do item. O Claude Code grava sob o usuário do
 // sistema; descobrir a partir do item existente evita chutar errado quando
 // não é o caso.
@@ -99,8 +118,7 @@ func (k *keychain) account(ctx context.Context, fallback string) string {
 	if fallback != "" {
 		return fallback
 	}
-	out, err := exec.CommandContext(ctx, "/usr/bin/security",
-		"find-generic-password", "-s", k.service).CombinedOutput()
+	out, err := securityCmd(ctx, "find-generic-password", "-s", k.service).CombinedOutput()
 	if err == nil {
 		if acct := parseKeychainAccount(string(out)); acct != "" {
 			return acct
@@ -119,7 +137,7 @@ func (k *keychain) get(ctx context.Context, account string) ([]byte, error) {
 	if account != "" {
 		args = append(args, "-a", account)
 	}
-	out, err := exec.CommandContext(ctx, "/usr/bin/security", args...).Output()
+	out, err := securityCmd(ctx, args...).Output()
 	if err != nil {
 		return nil, ccaccount.ErrNoActiveSession
 	}
@@ -132,20 +150,63 @@ func (k *keychain) get(ctx context.Context, account string) ([]byte, error) {
 
 // set grava o segredo, atualizando o item se ele já existir.
 //
-// O segredo vai pela entrada padrão, não em argumento: `ps` mostra a linha
-// de comando de qualquer processo para qualquer usuário da máquina. O
-// `security` pede a senha duas vezes (digitar e confirmar), daí as duas
-// linhas iguais.
+// O segredo vai em hexadecimal (-X), e não pela entrada padrão, porque o
+// caminho interativo do `security` passa por um buffer de senha de 128
+// bytes: uma credencial do Claude Code tem quase cinco vezes isso e chegaria
+// cortada ao meio — um perfil que parece salvo e não serve para nada.
+//
+// O preço é a linha de comando, que `ps` mostra a qualquer usuário da
+// máquina enquanto o processo vive. Não há terceira via: o `security` só
+// aceita o segredo por argumento ou pelo buffer truncado, e a API nativa
+// exigiria cgo, que custaria a compilação cruzada da tool inteira.
 func (k *keychain) set(ctx context.Context, account string, secret []byte) error {
 	acct := k.account(ctx, account)
-	cmd := exec.CommandContext(ctx, "/usr/bin/security",
-		"add-generic-password", "-U", "-s", k.service, "-a", acct, "-w")
-	cmd.Stdin = strings.NewReader(string(secret) + "\n" + string(secret) + "\n")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := securityCmd(ctx, "add-generic-password", "-U",
+		"-s", k.service, "-a", acct, "-X", hex.EncodeToString(secret)).CombinedOutput()
+	if err != nil {
+		// O contexto vencido aqui quase sempre significa que o `security`
+		// ficou esperando alguém digitar. Dizer isso é mais útil que repetir
+		// "signal: killed".
+		if ctx.Err() != nil {
+			return errKeychainStuck
+		}
 		return keychainError(out, err)
+	}
+	// Chaveiro trancado é o caminho que pediria digitação, e sem tty ele
+	// termina sem gravar. O texto do prompt na saída é o que denuncia.
+	if strings.Contains(string(out), "password to unlock") {
+		return errKeychainLocked
+	}
+
+	// Reler é barato e é a única forma de saber que o item ficou íntegro.
+	// Foi exatamente um segredo cortado — gravado sem erro nenhum — que
+	// produziu o primeiro perfil inútil desta tool.
+	stored, err := k.get(ctx, acct)
+	if err != nil {
+		return errKeychainUnverified
+	}
+	if !bytes.Equal(stored, secret) {
+		return errKeychainTruncated
 	}
 	return nil
 }
+
+// errKeychainLocked pede a ação que resolve, em vez de repetir o erro do
+// `security`, que fala de item e não de chaveiro.
+var errKeychainLocked = errors.New(
+	"o chaveiro está trancado — rode `security unlock-keychain` e tente de novo")
+
+// errKeychainStuck é o tempo esgotado esperando o chaveiro responder.
+var errKeychainStuck = errors.New(
+	"o chaveiro não respondeu — se houver um diálogo de autorização aberto, responda e tente de novo")
+
+// Os dois abaixo são a releitura falhando. Preferimos recusar a operação a
+// deixar no chaveiro um item que só se revelaria quebrado na hora de trocar
+// de conta.
+var (
+	errKeychainUnverified = errors.New("gravou no chaveiro mas não foi possível reler para conferir")
+	errKeychainTruncated  = errors.New("o chaveiro devolveu um valor diferente do gravado — nada foi salvo em condições de uso")
+)
 
 // delete remove o item.
 func (k *keychain) delete(ctx context.Context, account string) error {
@@ -153,7 +214,7 @@ func (k *keychain) delete(ctx context.Context, account string) error {
 	if account != "" {
 		args = append(args, "-a", account)
 	}
-	out, err := exec.CommandContext(ctx, "/usr/bin/security", args...).CombinedOutput()
+	out, err := securityCmd(ctx, args...).CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "could not be found") {
 		return keychainError(out, err)
 	}

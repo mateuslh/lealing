@@ -152,10 +152,17 @@ func (c *ConfigFile) SetAccount(_ context.Context, account json.RawMessage, user
 
 	// Dois espaços de indentação: é o formato que a própria CLI grava, e
 	// manter igual evita um diff artificial na próxima vez que ela salvar.
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
+	// O escape de HTML é desligado pelo mesmo motivo: `json.Marshal` troca
+	// `<`, `>` e `&` por sequências \u — legítimo, mas reescreveria campos
+	// que não temos nada a ver com eles.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
 		return err
 	}
+	out := buf.Bytes()
 
 	if c.BackupPath != "" {
 		// O backup é do arquivo como estava, não do que vamos gravar: é o

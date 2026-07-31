@@ -2,7 +2,10 @@
 
 package claudecli
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // dump é a descrição de um item como o `security` a imprime. O teste usa uma
 // saída fixa porque a alternativa — ler o chaveiro da máquina — não roda em
@@ -31,5 +34,16 @@ func TestParseKeychainAccount(t *testing.T) {
 	comEspaco := `    "acct"<blob>="nome com espaço"`
 	if got := ParseKeychainAccount(comEspaco); got != "nome com espaço" {
 		t.Errorf("conta = %q", got)
+	}
+}
+
+// TestSecurityRodaForaDaSessaoDeTerminal trava o detalhe que fez a tool
+// pendurar a TUI: com terminal controlador, o `security` abre /dev/tty,
+// escreve "password data for new item:" por cima do frame e espera uma
+// digitação que a TUI nunca entrega.
+func TestSecurityRodaForaDaSessaoDeTerminal(t *testing.T) {
+	cmd := securityCmd(context.Background(), "find-generic-password", "-s", "qualquer")
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setsid {
+		t.Error("chamada ao `security` sem Setsid: o prompt voltaria a travar a tela")
 	}
 }

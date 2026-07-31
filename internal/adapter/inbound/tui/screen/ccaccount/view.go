@@ -206,10 +206,12 @@ func (m *Model) profileLine(th *theme.Theme, p core.Profile, selected bool, widt
 	}
 
 	// O nome tem coluna própria para que os e-mails se alinhem: uma lista de
-	// duas contas é lida na vertical, comparando os campos.
-	nameW := min(m.widestName(), max(width/3, 8))
+	// duas contas é lida na vertical, comparando os campos. O +1 é a calha
+	// entre as colunas — sem ela, um nome que ocupa a coluna inteira encosta
+	// no e-mail e os dois viram uma palavra só.
+	nameW := min(m.widestName(), max(width/3, 8)) + 1
 	left := cursor + mark + " " + nameStyle.Render(component.PadRight(
-		component.TruncateTail(p.Name, nameW), nameW))
+		component.TruncateTail(p.Name, nameW-1), nameW))
 
 	detail := p.Identity.Email
 	if detail == "" {
