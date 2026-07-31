@@ -113,7 +113,9 @@ main() {
     # deixaria o tarball baixado em /tmp para sempre.
     trap 'rm -rf "$tmp"' EXIT INT TERM
 
-    info "baixando $asset…"
+    # As chaves não são estilo: sem elas o shell lê os bytes das reticências
+    # como parte do nome da variável e o script morre em "unbound variable".
+    info "baixando ${asset}…"
     download "$base/$asset" "$tmp/$asset" || die "não consegui baixar $base/$asset"
     download "$base/checksums.txt" "$tmp/checksums.txt" || die "não consegui baixar o checksums.txt"
 
