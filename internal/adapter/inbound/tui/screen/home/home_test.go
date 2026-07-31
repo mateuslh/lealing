@@ -150,8 +150,8 @@ func TestCatalogoEmbutidoValida(t *testing.T) {
 
 	// Toda tool declarada precisa ter uma tela ou um runner; a contagem
 	// aqui trava o acervo contra remoção acidental.
-	if m.highlights.TotalTools != 14 {
-		t.Errorf("tools = %d, quero 14", m.highlights.TotalTools)
+	if m.highlights.TotalTools != 15 {
+		t.Errorf("tools = %d, quero 15", m.highlights.TotalTools)
 	}
 	if m.highlights.TotalCategories != 5 {
 		t.Errorf("categorias povoadas = %d, quero 5", m.highlights.TotalCategories)

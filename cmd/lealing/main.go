@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/mateuslh/lealing/internal/bootstrap"
+	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 )
 
@@ -30,8 +31,10 @@ func run() error {
 		platforms  = flag.Bool("platforms", false, "mostra em quais sistemas cada tool roda e sai")
 		update     = flag.Bool("update", false, "atualiza o lealing pela linha de comando e sai")
 		listTools  = flag.Bool("tools", false, "lista as tools externas instaladas e sai")
-		install    = flag.String("tool-install", "", "instala ou atualiza uma tool a partir de um diretório local")
-		updateTool = flag.String("tool-update", "", "atualiza uma tool a partir de um diretório local")
+		market     = flag.Bool("marketplace", false, "lista as tools disponíveis no marketplace e sai")
+		marketURL  = flag.String("marketplace-url", bootstrap.DefaultMarketplaceURL, "URL HTTPS do índice do marketplace")
+		install    = flag.String("tool-install", "", "instala pelo ID do marketplace ou por um diretório local")
+		updateTool = flag.String("tool-update", "", "atualiza pelo ID do marketplace ou por um diretório local")
 		checksum   = flag.String("tool-checksum", "", "SHA-256 esperado para -tool-install")
 		remove     = flag.String("tool-remove", "", "remove uma tool instalada, preservando-a para recuperação")
 		rollback   = flag.String("tool-rollback", "", "troca a tool pela versão anterior instalada")
@@ -63,7 +66,7 @@ func run() error {
 	}
 
 	toolCommands := 0
-	for _, selected := range []bool{*listTools, *install != "", *updateTool != "", *remove != "", *rollback != "", *validate != ""} {
+	for _, selected := range []bool{*listTools, *market, *install != "", *updateTool != "", *remove != "", *rollback != "", *validate != ""} {
 		if selected {
 			toolCommands++
 		}
@@ -84,8 +87,8 @@ func run() error {
 		if source == "" {
 			source = *updateTool
 		}
-		return runToolCommand(context.Background(), bootstrap.ToolManager(), os.Stdout, toolCommand{
-			list: *listTools, install: source, checksum: *checksum,
+		return runToolCommand(context.Background(), bootstrap.ToolManager(), bootstrap.MarketplaceManager(version, *marketURL), os.Stdout, toolCommand{
+			list: *listTools, marketplace: *market, install: source, checksum: *checksum,
 			remove: *remove, rollback: *rollback,
 		})
 	}
@@ -94,9 +97,10 @@ func run() error {
 	}
 
 	app, err := bootstrap.Wire(bootstrap.Options{
-		Debug:     *debug,
-		Ephemeral: *ephemeral,
-		Version:   version,
+		Debug:          *debug,
+		Ephemeral:      *ephemeral,
+		Version:        version,
+		MarketplaceURL: *marketURL,
 	})
 	if err != nil {
 		return err
@@ -119,12 +123,18 @@ func run() error {
 }
 
 type toolCommand struct {
-	list              bool
+	list, marketplace bool
 	install, checksum string
 	remove, rollback  string
 }
 
-func runToolCommand(ctx context.Context, manager toolinstall.Manager, output io.Writer, command toolCommand) error {
+func runToolCommand(
+	ctx context.Context,
+	manager toolinstall.Manager,
+	market marketplace.Manager,
+	output io.Writer,
+	command toolCommand,
+) error {
 	switch {
 	case command.list:
 		installed, err := manager.ListInstalled(ctx)
@@ -146,7 +156,47 @@ func runToolCommand(ctx context.Context, manager toolinstall.Manager, output io.
 		}
 		return nil
 
+	case command.marketplace:
+		available, err := market.List(ctx)
+		if err != nil {
+			return err
+		}
+		if len(available) == 0 {
+			_, err = fmt.Fprintln(output, "nenhuma tool compatível disponível no marketplace")
+			return err
+		}
+		for _, tool := range available {
+			state := "disponível"
+			switch {
+			case tool.UpdateAvailable:
+				state = "atualização de " + tool.InstalledVersion
+			case tool.InstalledVersion != "":
+				state = "instalada"
+			}
+			if _, err := fmt.Fprintf(output, "%s\t%s\t%s\t%s\t%s\n",
+				tool.ID, tool.Version, tool.DistributionTier, state, tool.Summary); err != nil {
+				return err
+			}
+		}
+		return nil
+
 	case command.install != "":
+		info, statErr := os.Stat(command.install)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return statErr
+		}
+		if os.IsNotExist(statErr) && command.checksum == "" {
+			installed, err := market.Install(ctx, command.install)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(output, "%s@%s instalada do marketplace em %s (sha256 %s)\n",
+				installed.ID, installed.Version, installed.Path, installed.SHA256)
+			return err
+		}
+		if statErr == nil && !info.IsDir() {
+			return fmt.Errorf("pacote local precisa ser um diretório: %s", command.install)
+		}
 		installed, err := manager.InstallLocal(ctx, toolinstall.InstallRequest{
 			SourceDir: command.install, ExpectedSHA256: command.checksum,
 		})

@@ -21,6 +21,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/confirmation"
 	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
+	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	pluginscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/plugin"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
@@ -33,10 +34,12 @@ import (
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coregitinsight "github.com/mateuslh/lealing/internal/core/gitinsight"
 	"github.com/mateuslh/lealing/internal/core/interactive"
+	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	corepower "github.com/mateuslh/lealing/internal/core/power"
 	corerepoclone "github.com/mateuslh/lealing/internal/core/repoclone"
 	coreselfupdate "github.com/mateuslh/lealing/internal/core/selfupdate"
 	coresysinfo "github.com/mateuslh/lealing/internal/core/sysinfo"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 )
 
 var frames = []tui.Frame{
@@ -131,6 +134,13 @@ func (f *fakeInteractiveSession) Updates() <-chan interactive.Update            
 func (f *fakeInteractiveSession) Send(context.Context, interactive.Event) error           { return nil }
 func (f *fakeInteractiveSession) Respond(context.Context, interactive.HostResponse) error { return nil }
 func (f *fakeInteractiveSession) Shutdown(context.Context) error                          { return nil }
+
+type fakeMarketplace struct{ tools []coremarket.Listing }
+
+func (f fakeMarketplace) List(context.Context) ([]coremarket.Listing, error) { return f.tools, nil }
+func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installation, error) {
+	return toolinstall.Installation{}, nil
+}
 
 type fakeDevkitRunner struct{}
 
@@ -383,6 +393,24 @@ var cases = append([]screenCase{
 		name:  "plugin screen-v1",
 		build: pluginScreenFixture,
 		keys:  []string{"tab", "down"},
+	},
+	{
+		name: "marketplace",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, marketplacescreen.New(deps(), fakeMarketplace{tools: []coremarket.Listing{
+				{Entry: coremarket.Entry{
+					ID: "token-usage", Version: "1.0.0", Name: "Uso de Tokens",
+					Summary: "Mostra consumo de tokens e custos estimados.", Publisher: "mateuslh",
+					DistributionTier: coremarket.ChannelOfficial, Risk: "safe", Glyph: "✧",
+				}},
+				{Entry: coremarket.Entry{
+					ID: "community-demo", Version: "2.3.0", Name: "Tool da Comunidade com Nome Longo",
+					Summary: "Demonstra a listagem de uma publicação comunitária.", Publisher: "example",
+					DistributionTier: coremarket.ChannelCommunity, Risk: "caution",
+				}, InstalledVersion: "2.2.0", UpdateAvailable: true},
+			}}))
+		},
+		keys: []string{"down"},
 	},
 	{
 		name: "confirmação global",

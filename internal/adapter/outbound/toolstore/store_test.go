@@ -96,6 +96,43 @@ func TestChecksumErradoNaoSubstituiInstalacaoSaudavel(t *testing.T) {
 	}
 }
 
+func TestInstallRecusaIdentidadeDiferenteDoIndice(t *testing.T) {
+	root := t.TempDir()
+	request := toolinstall.InstallRequest{
+		SourceDir: source(t, "1.0.0", "ok"), ExpectedID: "outra-tool", ExpectedVersion: "2.0.0",
+	}
+	if _, err := store(root).Install(context.Background(), request); err == nil {
+		t.Fatal("Install aceitou identidade diferente do índice")
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("root alterado após recusa: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestInstallRecusaManifestQueDivergeDoAnunciadoNoMarketplace(t *testing.T) {
+	root := t.TempDir()
+	expected := &toolinstall.ManifestExpectation{
+		ID: "demo", Version: "1.0.0", Name: "Demo",
+		Summary: "Tool local de demonstração.", Detail: "Teste.", Category: "ai",
+		Risk: "caution", ProtocolMin: 1, ProtocolMax: 1,
+		FilesystemRead: []string{}, FilesystemWrite: []string{},
+	}
+	request := toolinstall.InstallRequest{
+		SourceDir: source(t, "1.0.0", "ok"), ExpectedManifest: expected,
+	}
+	if _, err := store(root).Install(context.Background(), request); err == nil || !strings.Contains(err.Error(), "risk") {
+		t.Fatalf("Install = %v", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("root alterado após recusa: entries=%v err=%v", entries, err)
+	}
+
+	expected.Risk = "safe"
+	if _, err := store(root).Install(context.Background(), request); err != nil {
+		t.Fatalf("manifest igual ao índice foi recusado: %v", err)
+	}
+}
+
 func TestManifestNovoInvalidoNaoSubstituiInstalacaoSaudavel(t *testing.T) {
 	root := t.TempDir()
 	s := store(root)

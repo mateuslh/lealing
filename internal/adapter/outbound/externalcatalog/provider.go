@@ -22,9 +22,10 @@ type Provider struct {
 	strict     bool
 	log        outbound.Logger
 
-	once  sync.Once
-	tools []domain.Tool
-	err   error
+	mu     sync.Mutex
+	loaded bool
+	tools  []domain.Tool
+	err    error
 }
 
 var _ outbound.ToolProvider = (*Provider)(nil)
@@ -58,8 +59,23 @@ func (*Provider) Name() string { return "installed-tools" }
 // Provide é lazy e cacheado. Nenhum caminho deste método abre ou executa o
 // binário declarado: a existência só será conferida pelo runtime no spawn.
 func (p *Provider) Provide(ctx context.Context) ([]domain.Tool, []domain.Category, error) {
-	p.once.Do(func() { p.tools, p.err = p.discover(ctx) })
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.loaded {
+		p.tools, p.err = p.discover(ctx)
+		p.loaded = true
+	}
 	return append([]domain.Tool(nil), p.tools...), nil, p.err
+}
+
+// Invalidate força a próxima leitura a redescobrir manifests. O método não
+// abre nem executa binários e só é chamado depois de uma instalação explícita.
+func (p *Provider) Invalidate() {
+	p.mu.Lock()
+	p.loaded = false
+	p.tools = nil
+	p.err = nil
+	p.mu.Unlock()
 }
 
 func (p *Provider) discover(ctx context.Context) ([]domain.Tool, error) {

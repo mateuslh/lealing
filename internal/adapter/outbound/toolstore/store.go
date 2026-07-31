@@ -51,6 +51,17 @@ func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest)
 	if err != nil {
 		return toolinstall.Installation{}, err
 	}
+	if request.ExpectedID != "" && manifest.ID != request.ExpectedID {
+		return toolinstall.Installation{}, fmt.Errorf("manifest declara ID %s, índice selecionou %s", manifest.ID, request.ExpectedID)
+	}
+	if request.ExpectedVersion != "" && manifest.Version != request.ExpectedVersion {
+		return toolinstall.Installation{}, fmt.Errorf("manifest declara versão %s, índice selecionou %s", manifest.Version, request.ExpectedVersion)
+	}
+	if request.ExpectedManifest != nil {
+		if err := matchesExpectation(manifest, *request.ExpectedManifest); err != nil {
+			return toolinstall.Installation{}, err
+		}
+	}
 	if !manifest.Supports(s.target) {
 		return toolinstall.Installation{}, fmt.Errorf("tool %s não publica artefato para %s-%s", manifest.ID, s.target.OS, s.target.Arch)
 	}
@@ -122,6 +133,59 @@ func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest)
 		ID: manifest.ID, Version: manifest.Version, PreviousVersion: previous,
 		SHA256: checksum, Path: versionDir,
 	}, nil
+}
+
+func matchesExpectation(manifest toolmanifest.Manifest, expected toolinstall.ManifestExpectation) error {
+	mismatch := func(field string) error {
+		return fmt.Errorf("manifest empacotado diverge do índice no campo %s", field)
+	}
+	switch {
+	case manifest.ID != expected.ID:
+		return mismatch("id")
+	case manifest.Version != expected.Version:
+		return mismatch("version")
+	case manifest.Name != expected.Name:
+		return mismatch("name")
+	case manifest.Summary != expected.Summary:
+		return mismatch("summary")
+	case manifest.Detail != expected.Detail:
+		return mismatch("detail")
+	case manifest.Category != expected.Category:
+		return mismatch("category")
+	case manifest.Risk != expected.Risk:
+		return mismatch("risk")
+	case manifest.Glyph != expected.Glyph:
+		return mismatch("glyph")
+	case manifest.Runtime.Protocol.Min != expected.ProtocolMin || manifest.Runtime.Protocol.Max != expected.ProtocolMax:
+		return mismatch("runtime.protocol")
+	case manifest.Permissions.Network != expected.Network:
+		return mismatch("permissions.network")
+	case manifest.Permissions.Subprocess != expected.Subprocess:
+		return mismatch("permissions.subprocess")
+	case !sameStrings(manifest.Permissions.Filesystem.Read, expected.FilesystemRead):
+		return mismatch("permissions.filesystem.read")
+	case !sameStrings(manifest.Permissions.Filesystem.Write, expected.FilesystemWrite):
+		return mismatch("permissions.filesystem.write")
+	default:
+		return nil
+	}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) List(ctx context.Context) ([]toolinstall.Installed, error) {

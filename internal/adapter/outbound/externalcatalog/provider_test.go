@@ -135,6 +135,31 @@ func TestProviderExternoIntegraAoRegistryEDetectaIDDuplicado(t *testing.T) {
 	}
 }
 
+func TestReloadDoRegistryTornaInstalacaoVisivelNaMesmaEngine(t *testing.T) {
+	root := t.TempDir()
+	external := provider(root, true)
+	repository := registry.New([]outbound.ToolProvider{
+		&registry.Static{Label: "categorias", Categories: []domain.Category{{ID: "ai", Name: "IA"}}},
+		external,
+	}, registry.WithStrict(true))
+
+	tools, err := repository.All(context.Background())
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("catálogo inicial = %+v, %v", tools, err)
+	}
+	installManifest(t, root, "nova-tool", "1.0.0", manifestTemplate)
+	if _, err := repository.ByID(context.Background(), "nova-tool"); err == nil {
+		t.Fatal("cache mudou sem uma recarga explícita")
+	}
+	if err := repository.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tool, err := repository.ByID(context.Background(), "nova-tool")
+	if err != nil || tool.ID != "nova-tool" {
+		t.Fatalf("tool após reload = %+v, %v", tool, err)
+	}
+}
+
 func BenchmarkRegistrySemSpawn(b *testing.B) {
 	root := b.TempDir()
 	for i := 0; i < 100; i++ {

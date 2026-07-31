@@ -86,7 +86,28 @@ guarda o caminho absoluto. Para desinstalar, `make uninstall`.
 
 ### Tools externas
 
-Liste o que está instalado:
+Abra **Marketplace de Tools** na própria home ou use a CLI. A listagem remota
+filtra protocolo, versão mínima da engine e plataforma antes de oferecer a
+instalação:
+
+```sh
+lealing -marketplace
+lealing -tool-install token-usage
+lealing -tool-update token-usage
+lealing -tools
+```
+
+O índice só é consultado ao abrir o marketplace ou ao executar um desses
+comandos; startup e busca local não fazem rede nem iniciam processos. O pacote
+é baixado para cache temporário com limite de tamanho, tem o SHA-256 conferido
+antes da extração, recusa caminhos externos e links e é revalidado contra o ID
+e a versão escolhidos antes da troca atômica.
+
+O índice público consolidado fica em
+[`lealing-tools/marketplace/index.json`](https://github.com/mateuslh/lealing-tools/blob/main/marketplace/index.json).
+Para testar outro registry compatível, use `-marketplace-url URL_HTTPS`.
+
+Liste somente o que já está instalado:
 
 ```sh
 lealing -tools
@@ -109,11 +130,11 @@ lealing -tool-remove token-usage
 ```
 
 A vertical oficial vive em
-[`mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools). Baixe e
-extraia o pacote da
-[última release](https://github.com/mateuslh/lealing-tools/releases/latest),
-então passe o diretório extraído a `lealing -tool-install`. A engine abre
-normalmente sem nenhuma tool externa; uma ausente não vira item quebrado.
+[`mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools). Autores
+independentes podem hospedar seus próprios releases e enviar uma entrada pelo
+[guia de publicação](https://github.com/mateuslh/lealing-tools/blob/main/marketplace/README.md).
+A engine abre normalmente sem nenhuma tool externa; uma ausente não vira item
+quebrado.
 
 Instalações ficam em
 `~/.local/share/lealing/tools/<id>/<version>/` no macOS/Linux e em
@@ -263,16 +284,18 @@ lealing                                          # abre a TUI
 lealing -render 150x42                           # imprime um frame estático
 lealing -render 120x34 -keys '/token[enter]'     # já dentro de uma tool
 lealing -update                                  # atualiza e sai
+lealing -marketplace                             # tools públicas compatíveis
 lealing -tools                                   # tools externas instaladas
+lealing -tool-install token-usage                # instala pelo marketplace
 lealing -tool-install ./pacote                   # instala/atualiza localmente
 lealing -tool-rollback token-usage               # recupera versão anterior
 ```
 
 Flags: `-debug` (log em arquivo + validação estrita do catálogo),
 `-ephemeral` (não persiste favoritos), `-platforms` (matriz de suporte),
-`-update` (atualiza a engine sem abrir a TUI), `-tools`, `-tool-install`,
-`-tool-update`, `-tool-remove`, `-tool-rollback`, `-tool-validate` e
-`-version`.
+`-update` (atualiza a engine sem abrir a TUI), `-marketplace`,
+`-marketplace-url`, `-tools`, `-tool-install`, `-tool-update`, `-tool-remove`,
+`-tool-rollback`, `-tool-validate` e `-version`.
 
 Sem instalar tools: `make run`. Para renderizar `token-usage`, instale o pacote
 extraído da release oficial e use
@@ -345,6 +368,7 @@ internal/
     outbound/
       externalcatalog/          descoberta lazy, somente por manifest
       pluginprocess/            spawn, handshake, framing e shutdown
+      marketplacehttp/         índice, download, checksum e extração segura
       toolstore/                instalação local atômica e rollback
       registry/ search/         consolidação e relevância
       persistence/              favoritos e estatísticas em JSON atômico

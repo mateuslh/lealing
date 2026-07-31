@@ -15,6 +15,21 @@ var ErrInvalidChecksum = errors.New("checksum SHA-256 inválido")
 type InstallRequest struct {
 	SourceDir      string
 	ExpectedSHA256 string
+	// ExpectedID e ExpectedVersion ligam um pacote remoto à entrada escolhida
+	// no índice antes de qualquer diretório ativo ser alterado.
+	ExpectedID       string
+	ExpectedVersion  string
+	ExpectedManifest *ManifestExpectation
+}
+
+// ManifestExpectation fixa os campos exibidos e negociados pelo marketplace.
+// O adapter de instalação compara estes valores com o manifest empacotado
+// antes de criar ou trocar qualquer versão ativa.
+type ManifestExpectation struct {
+	ID, Version, Name, Summary, Detail, Category, Risk, Glyph string
+	ProtocolMin, ProtocolMax                                  int
+	FilesystemRead, FilesystemWrite                           []string
+	Network, Subprocess                                       bool
 }
 
 type Installation struct {

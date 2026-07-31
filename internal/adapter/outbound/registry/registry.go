@@ -29,15 +29,17 @@ type Registry struct {
 	// enxergar o acervo inteiro, não o recorte da máquina que os roda.
 	platform domain.Platform
 
-	once  sync.Once
-	err   error
-	mu    sync.RWMutex
-	tools []domain.Tool
-	byID  map[domain.ToolID]domain.Tool
-	cats  []domain.Category
+	loadMu sync.Mutex
+	loaded bool
+	err    error
+	mu     sync.RWMutex
+	tools  []domain.Tool
+	byID   map[domain.ToolID]domain.Tool
+	cats   []domain.Category
 }
 
 var _ outbound.ToolRepository = (*Registry)(nil)
+var _ outbound.ReloadableToolRepository = (*Registry)(nil)
 
 // Option configura o Registry na construção.
 type Option func(*Registry)
@@ -99,7 +101,28 @@ func (r *Registry) Categories(ctx context.Context) ([]domain.Category, error) {
 
 // load consolida todos os providers. Idempotente e seguro para concorrência.
 func (r *Registry) load(ctx context.Context) error {
-	r.once.Do(func() { r.err = r.doLoad(ctx) })
+	r.loadMu.Lock()
+	defer r.loadMu.Unlock()
+	if r.loaded {
+		return r.err
+	}
+	r.err = r.doLoad(ctx)
+	r.loaded = true
+	return r.err
+}
+
+// Reload invalida providers com cache e recompõe o índice em memória. Ele é
+// chamado apenas depois de uma mutação explícita no diretório de tools.
+func (r *Registry) Reload(ctx context.Context) error {
+	r.loadMu.Lock()
+	defer r.loadMu.Unlock()
+	for _, provider := range r.providers {
+		if invalidatable, ok := provider.(interface{ Invalidate() }); ok {
+			invalidatable.Invalidate()
+		}
+	}
+	r.err = r.doLoad(ctx)
+	r.loaded = true
 	return r.err
 }
 

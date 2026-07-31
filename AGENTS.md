@@ -783,6 +783,18 @@ lealing -tool-rollback token-usage
 lealing -tool-remove token-usage
 ```
 
+Depois de indexada, a mesma tool instala sem clone nem pacote manual:
+
+```sh
+lealing -marketplace
+lealing -tool-install token-usage
+lealing -tool-update token-usage
+```
+
+Na TUI, abra a builtin `marketplace`; ela consulta a mesma porta do core e
+exibe canal, publicador, risco e permissões antes da confirmação global. A
+consulta não participa do startup nem da busca da home.
+
 Para outra tool, produza um diretório com `manifest.yaml` e o executável e
 rode `lealing -tool-install DIRETORIO`. Instalar uma versão mais nova (ou
 `-tool-update DIRETORIO`) preserva a ativa anterior. A troca de `active` é
@@ -797,17 +809,30 @@ seu manifest.
 
 ### 11.10 Marketplace e versionamento
 
-O índice usa o modelo de `internal/core/marketplace`: ID, versão, publicador,
-URL do manifest, artefatos por alvo, SHA-256, intervalo do protocolo, versão
-mínima da engine e canal `official`, `verified` ou `community`. O seletor pega
-a versão mais nova compatível; nunca fixe a engine a uma versão numérica da
-tool.
+O índice usa o modelo de `internal/core/marketplace`: ID, versão, metadados de
+exibição, permissões, publicador, URL do manifest, artefatos por alvo, SHA-256,
+intervalo do protocolo, versão mínima da engine e canal `official`, `verified`
+ou `community`. O seletor pega a versão mais nova compatível; nunca fixe a
+engine a uma versão numérica da tool.
+
+O registry público vive em `github.com/mateuslh/lealing-tools/marketplace`.
+Para publicar, crie uma entrada imutável por versão em `marketplace/tools/`,
+comece no canal `community`, rode `go run ./cmd/marketplace-index` e envie a
+entrada mais o `index.json` gerado por pull request. `publishers.json` reserva
+`official` e `verified`; CODEOWNERS exige revisão da política. A CI valida
+SemVer, duplicatas, categorias, plataformas, HTTPS, checksums, protocolo,
+permissões e a reprodução determinística do índice sem baixar ou executar o
+artefato. Veja `lealing-tools/marketplace/README.md` e `schema.json`.
 
 Versione tool e protocolo separadamente. Mudança compatível incrementa a tool;
 mudança de fio aditiva mantém o intervalo; quebra de contrato cria outra
 versão do protocolo e preserva negociação com versões antigas quando possível.
-O catálogo HTTP fica para a fase após a extração. Até lá, instalação por
-arquivo/local é o caminho suportado e não depende de GitHub.
+O cliente da engine não depende de GitHub: recebe uma URL HTTPS de índice,
+baixa em streaming com limites, verifica o checksum do pacote, recusa
+traversal e links na extração e só então entrega o diretório temporário ao
+instalador local. O índice padrão usa o arquivo consolidado do repositório das
+tools; `-marketplace-url` permite testar outro registry que obedeça ao mesmo
+contrato.
 
 `token-usage` já foi extraída para `github.com/mateuslh/lealing-tools`. Migre as
 outras verticais em mudanças independentes, conserve os IDs e importe apenas o

@@ -100,6 +100,17 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Keywords: []string{"update", "atualizar", "upgrade", "versão", "release", "github"},
 		},
 		{
+			ID:       "marketplace",
+			Name:     "Marketplace de Tools",
+			Summary:  "Descubra, instale e atualize tools publicadas para o lealing.",
+			Detail:   "Lê o índice público somente ao abrir esta tela. Cada pacote é limitado, conferido pelo SHA-256 publicado, extraído sem permitir escape do diretório e revalidado antes da troca atômica da versão ativa.",
+			Category: Utilities.ID,
+			Kind:     domain.KindBuiltin,
+			Risk:     domain.RiskSafe,
+			Glyph:    "◫",
+			Keywords: []string{"marketplace", "market", "tools", "plugin", "instalar", "atualizar", "extensão"},
+		},
+		{
 			ID:        "clone-repo-bradesco",
 			Name:      "Clone Repo Bradesco",
 			Summary:   "Clone no diretório dev toda a família GitHub de um projeto e adicione-a aos recentes do IntelliJ.",

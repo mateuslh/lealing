@@ -30,6 +30,14 @@ type ToolRepository interface {
 	Categories(ctx context.Context) ([]domain.Category, error)
 }
 
+// ReloadableToolRepository recompõe providers depois de instalar, atualizar,
+// remover ou fazer rollback de uma tool. A carga continua lazy no arranque;
+// somente uma mutação explícita pede recarga.
+type ReloadableToolRepository interface {
+	ToolRepository
+	Reload(ctx context.Context) error
+}
+
 // Searcher ranqueia tools contra um termo de busca.
 //
 // O adapter é deliberadamente textual: sinais de negócio como frequência,

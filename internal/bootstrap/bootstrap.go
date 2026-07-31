@@ -20,6 +20,7 @@ import (
 	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
 	gitinsightscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
+	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	powerscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
@@ -54,6 +55,8 @@ type Options struct {
 	Debug bool
 	// Version aparece na topbar.
 	Version string
+	// MarketplaceURL permite testar outro índice sem acoplar o core à origem.
+	MarketplaceURL string
 }
 
 // App é a aplicação montada, pronta para rodar.
@@ -103,14 +106,15 @@ func Wire(opts Options) (*App, error) {
 	// esta máquina enxerga. Manter a declaração única evita que a lista de
 	// tools se bifurque por sistema operacional.
 	providers := catalog.Providers()
-	providers = append(providers, externalcatalog.New(externalcatalog.Options{
+	externalTools := externalcatalog.New(externalcatalog.Options{
 		Root:       directories.Tools,
 		Categories: catalog.Categories(),
 		Reserved:   catalog.ReservedIDs(),
 		Target:     currentToolTarget(),
 		Strict:     opts.Debug,
 		Logger:     log,
-	}))
+	})
+	providers = append(providers, externalTools)
 	repo := registry.New(providers,
 		registry.WithLogger(log),
 		registry.WithStrict(opts.Debug),
@@ -140,6 +144,10 @@ func Wire(opts Options) (*App, error) {
 	// favoritos e recência. Assim o grafo permanece acíclico.
 	catalogSvc := service.NewCatalog(repo, search.NewFuzzy(), usageStore, clock)
 	prerequisites := service.NewPrerequisites(repo, requirements.NewPathChecker())
+	toolManager := newToolManager(directories.Tools)
+	marketplaceSvc := newMarketplaceManager(
+		opts.Version, opts.MarketplaceURL, toolManager, repo, directories.Cache,
+	)
 
 	var toolRunners []outbound.ToolRunner
 	launcher := service.NewLauncher(repo, catalogSvc, clock, log, toolRunners...)
@@ -198,6 +206,7 @@ func Wire(opts Options) (*App, error) {
 	// pela factory genérica da home, sem uma entrada por ID neste mapa.
 	screens := tui.Screens{
 		"claude-accounts": func() tui.Screen { return accountsscreen.New(deps, accounts, clock.Now) },
+		"marketplace":     func() tui.Screen { return marketplacescreen.New(deps, marketplaceSvc) },
 		"self-update": func() tui.Screen {
 			return updatescreen.New(deps, Updater(opts.Version), userHome, clock.Now)
 		},
