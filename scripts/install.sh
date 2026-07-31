@@ -9,6 +9,7 @@
 # Variáveis:
 #   LEALING_VERSION   tag a instalar (padrão: a última release)
 #   LEALING_BIN_DIR   diretório de instalação (padrão: ~/.local/bin)
+#   LEALING_NO_PATH   se definida, não mexe no arquivo de perfil do shell
 #
 # O script é POSIX sh de propósito: ele roda antes de o usuário ter qualquer
 # coisa instalada, então não pode depender de bash, de jq nem de python.
@@ -138,13 +139,69 @@ main() {
     case ":$PATH:" in
         *":$BIN_DIR:"*)
             info "rode: $BINARY"
-            ;;
-        *)
-            info ""
-            info "AVISO: $BIN_DIR não está no PATH. Adicione ao seu ~/.zprofile ou ~/.bashrc:"
-            info "  export PATH=\"$BIN_DIR:\$PATH\""
+            return
             ;;
     esac
+
+    if [ -n "${LEALING_NO_PATH:-}" ]; then
+        info "adicione ao PATH: export PATH=\"$BIN_DIR:\$PATH\""
+        return
+    fi
+
+    add_to_path
+}
+
+# profile_file escolhe onde o PATH do usuário é declarado.
+#
+# Para zsh é o ~/.zshrc, e não o ~/.zprofile: os dois funcionam em um terminal
+# recém-aberto, mas só o .zshrc é lido por shell interativo não-login — que é
+# o que a maioria dos emuladores de terminal abre no Linux.
+profile_file() {
+    shell=$(basename "${SHELL:-sh}")
+    case "$shell" in
+        zsh)  printf '%s' "$HOME/.zshrc" ;;
+        bash)
+            # No macOS o Terminal abre shell de login, que lê .bash_profile e
+            # ignora o .bashrc; no Linux é o contrário.
+            if [ "$(uname -s)" = "Darwin" ] && [ -f "$HOME/.bash_profile" ]; then
+                printf '%s' "$HOME/.bash_profile"
+            else
+                printf '%s' "$HOME/.bashrc"
+            fi
+            ;;
+        *) printf '%s' "$HOME/.profile" ;;
+    esac
+}
+
+# add_to_path acrescenta o diretório ao perfil do shell, uma única vez.
+#
+# A linha é idempotente de dois jeitos: o script confere se já a escreveu
+# antes de acrescentar, e a própria linha testa o PATH em tempo de execução —
+# então nem rodar o instalador de novo nem ter o diretório já no PATH por
+# outro caminho duplica a entrada.
+add_to_path() {
+    profile=$(profile_file)
+    line="export PATH=\"$BIN_DIR:\$PATH\""
+
+    if [ -f "$profile" ] && grep -Fq "$BIN_DIR" "$profile"; then
+        info "$BIN_DIR já está no $(basename "$profile") — abra um terminal novo e rode: $BINARY"
+        return
+    fi
+
+    {
+        printf '\n# lealing\n'
+        printf 'case ":$PATH:" in *":%s:"*) ;; *) %s ;; esac\n' "$BIN_DIR" "$line"
+    } >> "$profile" 2>/dev/null || {
+        info ""
+        info "não consegui escrever em $profile. Adicione você mesmo:"
+        info "  $line"
+        return
+    }
+
+    info "$BIN_DIR adicionado ao PATH em $(basename "$profile")"
+    info ""
+    info "nesta sessão, rode:  export PATH=\"$BIN_DIR:\$PATH\""
+    info "em um terminal novo, só:  $BINARY"
 }
 
 main "$@"

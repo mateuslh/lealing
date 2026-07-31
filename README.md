@@ -22,8 +22,17 @@ curl -fsSL https://raw.githubusercontent.com/mateuslh/lealing/main/scripts/insta
 
 O script detecta sistema e arquitetura, baixa o binário da última release,
 **confere o sha256 contra o `checksums.txt` publicado** e instala em
-`~/.local/bin/lealing`. Nada é instalado se o checksum não bater. Para
-escolher outro destino ou outra versão:
+`~/.local/bin/lealing`. Nada é instalado se o checksum não bater.
+
+**Ele também põe o diretório no seu PATH**, escrevendo uma linha no perfil do
+shell (`~/.zshrc`, `~/.bash_profile`, `~/.bashrc` ou `~/.profile`, conforme o
+seu shell) — só quando o diretório ainda não está lá, e a linha é idempotente,
+então rodar o instalador de novo não duplica nada. Num terminal novo, `lealing`
+já funciona; no que está aberto, aplique com
+`export PATH="$HOME/.local/bin:$PATH"`.
+
+Variáveis: `LEALING_BIN_DIR` escolhe o destino, `LEALING_VERSION` a tag e
+`LEALING_NO_PATH=1` deixa o seu perfil em paz.
 
 ```sh
 LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.1.0 sh install.sh
