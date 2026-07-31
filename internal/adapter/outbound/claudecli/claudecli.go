@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 
 	"github.com/mateuslh/lealing/internal/core/ccaccount"
+	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
 // Caminhos que a CLI usa, relativos ao diretório do usuário.
@@ -24,18 +25,12 @@ const (
 	claudeDir       = ".claude"
 )
 
-// ConfigPath é o ~/.claude.json (ou %USERPROFILE%\.claude.json no Windows).
-func ConfigPath() string { return homePath(configName) }
+// ConfigPath devolve o arquivo de configuração sob a home recebida.
+func ConfigPath(home string) string { return filepath.Join(home, configName) }
 
-// CredentialsPath é o arquivo de credencial que a CLI usa fora do macOS.
-func CredentialsPath() string { return homePath(claudeDir, credentialsName) }
-
-func homePath(parts ...string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(parts...)
-	}
-	return filepath.Join(append([]string{home}, parts...)...)
+// CredentialsPath devolve o arquivo de credencial sob a home recebida.
+func CredentialsPath(home string) string {
+	return filepath.Join(home, claudeDir, credentialsName)
 }
 
 // --- Credencial em arquivo ---------------------------------------------
@@ -47,8 +42,8 @@ type FileVault struct{ Path string }
 
 var _ ccaccount.Vault = (*FileVault)(nil)
 
-// NewFileVault monta o cofre de arquivo no caminho padrão.
-func NewFileVault() *FileVault { return &FileVault{Path: CredentialsPath()} }
+// NewFileVault monta o cofre de arquivo no caminho explícito.
+func NewFileVault(path string) *FileVault { return &FileVault{Path: path} }
 
 // Read implementa ccaccount.Vault.
 func (v *FileVault) Read(context.Context) (json.RawMessage, error) {
@@ -61,7 +56,7 @@ func (v *FileVault) Read(context.Context) (json.RawMessage, error) {
 
 // Write implementa ccaccount.Vault.
 func (v *FileVault) Write(_ context.Context, credential json.RawMessage) error {
-	if err := os.MkdirAll(filepath.Dir(v.Path), 0o700); err != nil {
+	if err := xdg.MkdirAll(filepath.Dir(v.Path), 0o700); err != nil {
 		return err
 	}
 	return writeAtomic(v.Path, credential, 0o600)
@@ -87,9 +82,9 @@ type ConfigFile struct {
 
 var _ ccaccount.Config = (*ConfigFile)(nil)
 
-// NewConfigFile monta o adapter com os caminhos padrão.
-func NewConfigFile(backupPath string) *ConfigFile {
-	return &ConfigFile{Path: ConfigPath(), BackupPath: backupPath}
+// NewConfigFile monta o adapter com caminhos explícitos.
+func NewConfigFile(path, backupPath string) *ConfigFile {
+	return &ConfigFile{Path: path, BackupPath: backupPath}
 }
 
 // accountKey e userKey são as chaves que carregam a identidade.
@@ -168,7 +163,7 @@ func (c *ConfigFile) SetAccount(_ context.Context, account json.RawMessage, user
 		// O backup é do arquivo como estava, não do que vamos gravar: é o
 		// que permite voltar atrás se a troca der errado.
 		if raw, err := os.ReadFile(c.Path); err == nil {
-			if err := os.MkdirAll(filepath.Dir(c.BackupPath), 0o700); err == nil {
+			if err := xdg.MkdirAll(filepath.Dir(c.BackupPath), 0o700); err == nil {
 				_ = writeAtomic(c.BackupPath, raw, 0o600)
 			}
 		}
@@ -226,6 +221,11 @@ func writeAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	// Um `sudo lealing` que troca de conta não pode deixar o ~/.claude.json
+	// com dono root: a CLI do Claude roda como o usuário e pararia de abrir.
+	if err := xdg.Adopt(tmpName); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

@@ -1,6 +1,6 @@
 // Package catalog declara as tools embutidas do lealing.
 //
-// Cada domínio é um port.ToolProvider independente. Essa granularidade é o
+// Cada domínio é um outbound.ToolProvider independente. Essa granularidade é o
 // que permite o acervo crescer para centenas de itens sem virar um arquivo
 // de milhares de linhas — e é o que permitirá, depois, carregar tools de
 // manifestos externos com exatamente o mesmo contrato.
@@ -11,8 +11,9 @@ package catalog
 import (
 	"context"
 
+	"github.com/mateuslh/lealing/internal/core/devkit"
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
 // Categorias do acervo. A ordem de declaração é a ordem na sidebar.
@@ -34,12 +35,12 @@ var categories = []domain.Category{System, AI, Network, Media, Development, Util
 // dentro da TUI, em vez de dispararem um processo externo.
 type Builtin struct{}
 
-var _ port.ToolProvider = (*Builtin)(nil)
+var _ outbound.ToolProvider = (*Builtin)(nil)
 
-// Name implementa port.ToolProvider.
+// Name implementa outbound.ToolProvider.
 func (Builtin) Name() string { return "builtin" }
 
-// Provide implementa port.ToolProvider.
+// Provide implementa outbound.ToolProvider.
 //
 // Os IDs são estáveis e casam com os do Arteus Tools, de onde estas tools
 // vieram: favoritos e estatísticas seguem o ID, então mudá-lo descartaria o
@@ -57,7 +58,6 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Platforms: domain.Darwin | domain.Windows,
 			Glyph:     "⏻",
 			Keywords:  []string{"pmset", "powercfg", "energia", "bateria", "dormir", "sleep", "power", "hibernar"},
-			Tags:      []domain.Tag{"sistema", "energia"},
 		},
 		{
 			ID:        "system-info",
@@ -70,7 +70,6 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Platforms: domain.Darwin | domain.Windows,
 			Glyph:     "◎",
 			Keywords:  []string{"sysctl", "wmi", "hardware", "cpu", "memória", "uptime", "bateria", "macos", "windows"},
-			Tags:      []domain.Tag{"sistema", "leitura"},
 		},
 		{
 			// Sem Platforms: as CLIs de IA escrevem os mesmos JSONL em
@@ -84,7 +83,6 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Risk:     domain.RiskSafe,
 			Glyph:    "◔",
 			Keywords: []string{"claude", "codex", "custo", "tokens", "gasto", "usage", "preço"},
-			Tags:     []domain.Tag{"ia", "leitura", "custos"},
 		},
 		{
 			// Sem Platforms: o cofre muda de sistema para sistema — chaveiro
@@ -99,7 +97,6 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Risk:     domain.RiskCaution,
 			Glyph:    "⇆",
 			Keywords: []string{"claude", "conta", "login", "sessão", "trocar", "alternar", "switch", "account", "perfil", "credencial"},
-			Tags:     []domain.Tag{"ia", "conta"},
 		},
 		{
 			// Sem Platforms: trocar o próprio binário é HTTP, checksum e
@@ -114,18 +111,86 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Risk:     domain.RiskCaution,
 			Glyph:    "⇪",
 			Keywords: []string{"update", "atualizar", "upgrade", "versão", "release", "github"},
-			Tags:     []domain.Tag{"manutenção"},
+		},
+		{
+			ID:        "clone-repo-bradesco",
+			Name:      "Clone Repo Bradesco",
+			Summary:   "Clone no diretório dev toda a família GitHub de um projeto e adicione-a aos recentes do IntelliJ.",
+			Detail:    "Aceita link de página ou URL HTTPS/SSH de clone. Usa a sessão autenticada do GitHub CLI (`gh auth login`) para listar no mesmo owner o projeto principal, o -config e todos os repositórios com o mesmo prefixo. Antes de clonar, permite incluir, excluir, remover da proposta e adicionar outros repos, mostrando descrição, visibilidade, linguagem, branch, atualização e tamanho. Cria ~/dev/<projeto>/<repositório> sem sobrescrever pastas existentes e registra cada diretório no IntelliJ IDEA.",
+			Category:  Development.ID,
+			Kind:      domain.KindBuiltin,
+			Risk:      domain.RiskCaution,
+			Platforms: domain.Darwin | domain.Windows,
+			Requirements: []domain.Requirement{
+				{Executable: "git", Name: "Git", InstallHint: "instale o Git e confirme que `git` está no PATH"},
+				{Executable: "gh", Name: "GitHub CLI", InstallHint: "instale o GitHub CLI e rode `gh auth login`"},
+			},
+			Glyph:    "⇣",
+			Keywords: []string{"bradesco", "github", "git", "clone", "repo", "repositório", "config", "intellij", "idea", "dev"},
+			Tags:     []domain.Tag{"bradesco"},
+		},
+		{
+			ID:       "git-dev-radar",
+			Name:     "Radar Git do dev",
+			Summary:  "Encontre commits não enviados, branches locais já publicadas e clones alterados em todo o diretório dev.",
+			Detail:   "Varre recursivamente ~/dev no macOS e %USERPROFILE%\\dev no Windows, usando até dez processos Git em paralelo. Cada clone mostra branches para push, locais já publicadas, branches sem upstream e arquivos alterados; navegue entre esses tipos com ←/→ ou 1–5. Permite atualizar remotos, publicar uma branch pendente, remover com segurança uma branch local já publicada ou atualizar a main/master de todos os clones com `u`. A atualização geral usa somente fast-forward, não troca a branch em uso e ignora clones alterados ou com commits locais. Push, remoção e atualização geral abrem um modal de confirmação; a remoção usa somente `git branch -d`.",
+			Category: Development.ID,
+			Kind:     domain.KindBuiltin,
+			Risk:     domain.RiskDestructive,
+			Requirements: []domain.Requirement{
+				{Executable: "git", Name: "Git", InstallHint: "instale o Git e confirme que `git` está no PATH"},
+			},
+			Glyph:    "⑂",
+			Keywords: []string{"git", "branch", "push", "pull", "fetch", "main", "master", "atualizar todos", "ahead", "upstream", "remote", "cleanup", "limpeza", "dev", "repositórios"},
 		},
 	}
+	tools = append(tools, devkitTools()...)
 
 	return tools, categories, nil
+}
+
+// devkitTools traduz as definições funcionais do núcleo para itens do
+// catálogo. A identidade fica em um só lugar, enquanto categoria e busca
+// continuam sendo responsabilidade editorial do acervo.
+func devkitTools() []domain.Tool {
+	keywords := map[devkit.Tool][]string{
+		devkit.ToolHTTP:     {"http", "https", "api", "rest", "status", "header", "latência", "health"},
+		devkit.ToolNetwork:  {"dns", "tls", "ssl", "certificado", "cname", "ip", "san", "rede"},
+		devkit.ToolJSON:     {"json", "formatar", "validar", "pretty", "minify", "compactar"},
+		devkit.ToolJWT:      {"jwt", "token", "claims", "oauth", "oidc", "bearer", "base64url"},
+		devkit.ToolCIDR:     {"cidr", "subnet", "rede", "máscara", "broadcast", "ipv4", "ipv6"},
+		devkit.ToolCodec:    {"base64", "base64url", "url encode", "decode", "percent encoding", "codec"},
+		devkit.ToolChecksum: {"sha256", "sha512", "sha1", "hash", "digest", "checksum"},
+		devkit.ToolUUID:     {"uuid", "guid", "v4", "v7", "identificador", "aleatório"},
+	}
+
+	definitions := devkit.Definitions()
+	tools := make([]domain.Tool, 0, len(definitions))
+	for _, definition := range definitions {
+		category := Development.ID
+		if definition.Tool == devkit.ToolHTTP || definition.Tool == devkit.ToolNetwork || definition.Tool == devkit.ToolCIDR {
+			category = Network.ID
+		}
+		tools = append(tools, domain.Tool{
+			ID:       domain.ToolID(definition.ToolID),
+			Name:     definition.Name,
+			Summary:  definition.Summary,
+			Detail:   definition.Detail,
+			Category: category,
+			Kind:     domain.KindBuiltin,
+			Risk:     domain.RiskSafe,
+			Glyph:    definition.Glyph,
+			Keywords: keywords[definition.Tool],
+		})
+	}
+	return tools
 }
 
 // Providers devolve todos os providers embutidos.
 //
 // Novos providers entram aqui. Um provider pode vir de qualquer lugar —
 // código, manifesto em disco, serviço remoto —, desde que satisfaça
-// port.ToolProvider.
-func Providers() []port.ToolProvider {
-	return []port.ToolProvider{Builtin{}}
+// outbound.ToolProvider.
+func Providers() []outbound.ToolProvider {
+	return []outbound.ToolProvider{Builtin{}}
 }

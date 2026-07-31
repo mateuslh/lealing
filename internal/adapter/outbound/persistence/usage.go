@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
+	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
-// UsageFile implementa port.UsageStore sobre um único arquivo JSON.
+// UsageFile implementa outbound.UsageStore sobre um único arquivo JSON.
 //
 // A escrita é debounced e atômica: a TUI pode chamar Save a cada toggle de
 // favorito sem transformar isso em uma tempestade de fsync, e um crash no
@@ -32,7 +33,7 @@ type UsageFile struct {
 	flushed chan struct{}
 }
 
-var _ port.UsageStore = (*UsageFile)(nil)
+var _ outbound.UsageStore = (*UsageFile)(nil)
 
 // NewUsageFile monta o store. Um debounce zero grava de forma síncrona, o
 // que é o comportamento desejado em testes.
@@ -60,7 +61,7 @@ type fileFormat struct {
 
 const currentVersion = 1
 
-// Load implementa port.UsageStore. Arquivo ausente não é erro: significa
+// Load implementa outbound.UsageStore. Arquivo ausente não é erro: significa
 // primeira execução.
 func (s *UsageFile) Load(context.Context) (map[domain.ToolID]domain.Usage, error) {
 	s.mu.Lock()
@@ -72,7 +73,12 @@ func (s *UsageFile) Load(context.Context) (map[domain.ToolID]domain.Usage, error
 
 	raw, err := os.ReadFile(s.path)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fs.ErrPermission):
+		// Ausente é primeira execução. Ilegível costuma ser um arquivo que
+		// ficou com dono root depois de um `sudo lealing`: pelo mesmo motivo
+		// que toleramos um arquivo corrompido, ele não pode impedir a TUI de
+		// abrir. A próxima gravação, que troca o arquivo por rename, devolve
+		// o estado ao normal.
 		s.loaded = true
 		return s.snapshotLocked(), nil
 	case err != nil:
@@ -94,7 +100,7 @@ func (s *UsageFile) Load(context.Context) (map[domain.ToolID]domain.Usage, error
 	return s.snapshotLocked(), nil
 }
 
-// Save implementa port.UsageStore, agendando a gravação.
+// Save implementa outbound.UsageStore, agendando a gravação.
 func (s *UsageFile) Save(_ context.Context, u domain.Usage) error {
 	s.mu.Lock()
 	s.data[u.ToolID] = u
@@ -151,7 +157,7 @@ func (s *UsageFile) writeLocked() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := xdg.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
 
@@ -173,6 +179,11 @@ func (s *UsageFile) writeLocked() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// Antes do rename: o arquivo que vai virar o definitivo já entra no lugar
+	// com o dono certo, sem uma janela em que ele existe pertencendo ao root.
+	if err := xdg.Adopt(tmpName); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return err
 	}
@@ -189,21 +200,21 @@ func (s *UsageFile) snapshotLocked() map[domain.ToolID]domain.Usage {
 	return out
 }
 
-// MemoryUsage é um port.UsageStore volátil, útil em testes e no modo
+// MemoryUsage é um outbound.UsageStore volátil, útil em testes e no modo
 // efêmero (--no-persist).
 type MemoryUsage struct {
 	mu   sync.RWMutex
 	data map[domain.ToolID]domain.Usage
 }
 
-var _ port.UsageStore = (*MemoryUsage)(nil)
+var _ outbound.UsageStore = (*MemoryUsage)(nil)
 
 // NewMemoryUsage monta o store em memória.
 func NewMemoryUsage() *MemoryUsage {
 	return &MemoryUsage{data: make(map[domain.ToolID]domain.Usage)}
 }
 
-// Load implementa port.UsageStore.
+// Load implementa outbound.UsageStore.
 func (m *MemoryUsage) Load(context.Context) (map[domain.ToolID]domain.Usage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -214,7 +225,7 @@ func (m *MemoryUsage) Load(context.Context) (map[domain.ToolID]domain.Usage, err
 	return out, nil
 }
 
-// Save implementa port.UsageStore.
+// Save implementa outbound.UsageStore.
 func (m *MemoryUsage) Save(_ context.Context, u domain.Usage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

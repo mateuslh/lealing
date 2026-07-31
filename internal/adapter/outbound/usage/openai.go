@@ -38,10 +38,11 @@ type CodexQuota struct {
 	cached *quotaSnapshot
 }
 
-// NewCodexQuota monta o cliente com os padrões de produção.
-func NewCodexQuota() *CodexQuota {
+// NewCodexQuota monta o cliente com a fonte de credenciais escolhida pelo
+// composition root.
+func NewCodexQuota(source CodexCredentialSource) *CodexQuota {
 	return &CodexQuota{
-		Source:   NewCodexFile(),
+		Source:   source,
 		Client:   &http.Client{Timeout: 8 * time.Second},
 		Endpoint: CodexUsageEndpoint,
 		Now:      time.Now,
@@ -63,6 +64,9 @@ func (q *CodexQuota) fetch(ctx context.Context) ([]tokens.RateWindow, *tokens.Cr
 }
 
 func (q *CodexQuota) load(ctx context.Context, now time.Time) ([]tokens.RateWindow, *tokens.Credits, error) {
+	if q.Source == nil {
+		return nil, nil, ErrNoCodexCredentials
+	}
 	cred, err := q.Source.CodexCredential(ctx)
 	if err != nil {
 		return nil, nil, err

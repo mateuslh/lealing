@@ -18,13 +18,21 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/ccaccount"
+	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
+	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
+	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
+	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/tokens"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	coreaccount "github.com/mateuslh/lealing/internal/core/ccaccount"
+	coredevkit "github.com/mateuslh/lealing/internal/core/devkit"
+	"github.com/mateuslh/lealing/internal/core/domain"
+	coregitinsight "github.com/mateuslh/lealing/internal/core/gitinsight"
 	corepower "github.com/mateuslh/lealing/internal/core/power"
+	corerepoclone "github.com/mateuslh/lealing/internal/core/repoclone"
 	coreselfupdate "github.com/mateuslh/lealing/internal/core/selfupdate"
 	coresysinfo "github.com/mateuslh/lealing/internal/core/sysinfo"
 	coretokens "github.com/mateuslh/lealing/internal/core/tokens"
@@ -114,6 +122,68 @@ type fakeGenerator struct{ report coretokens.Report }
 
 func (f fakeGenerator) Generate(context.Context) (coretokens.Report, error) {
 	return f.report, nil
+}
+
+type fakeDevkitRunner struct{}
+
+func (fakeDevkitRunner) Run(context.Context, coredevkit.Request) (coredevkit.Result, error) {
+	return coredevkit.Result{
+		Title:   "Diagnóstico concluído",
+		Summary: "Resultado funcional com campos suficientes para exercitar rolagem e truncamento.",
+		Rows: []coredevkit.Row{
+			{Label: "Status", Value: "200 OK"},
+			{Label: "Protocolo", Value: "HTTP/2.0"},
+			{Label: "Destino final", Value: "https://api.uma-empresa-com-nome-muito-comprido.example/health"},
+			{Label: "Latência", Value: "183ms"},
+		},
+		Warning: "A assinatura não foi verificada; use a chave do emissor antes de confiar no conteúdo.",
+		Body: "{\n  \"servico\": \"pagamentos\",\n  \"regiao\": \"sa-east-1\",\n" +
+			"  \"dependencias\": [\"postgres\", \"kafka\", \"redis\"],\n" +
+			"  \"observacao\": \"conteúdo longo que precisa permanecer dentro do painel em qualquer geometria\"\n}",
+	}, nil
+}
+
+type fakeGitScanner struct{ report coregitinsight.Report }
+
+func (f fakeGitScanner) Scan(context.Context) (coregitinsight.Report, error) {
+	return f.report, nil
+}
+func (fakeGitScanner) Fetch(context.Context, string) error { return nil }
+func (fakeGitScanner) Push(context.Context, string, coregitinsight.Branch) error {
+	return nil
+}
+func (fakeGitScanner) DeleteLocalBranch(context.Context, string, string) error {
+	return nil
+}
+func (fakeGitScanner) UpdateAll(context.Context) (coregitinsight.UpdateReport, error) {
+	return coregitinsight.UpdateReport{
+		Results: []coregitinsight.UpdateResult{
+			{Repository: "pagamentos/pagamentos", Branch: "main", State: coregitinsight.UpdateUpdated, Detail: "avançou 2 commits"},
+			{Repository: "pagamentos/pagamentos-config", Branch: "main", State: coregitinsight.UpdateCurrent, Detail: "já estava em dia"},
+			{Repository: "clientes/clientes-api", Branch: "master", State: coregitinsight.UpdateSkipped, Detail: "working tree alterada"},
+			{Repository: "fraudes/motor-fraudes", State: coregitinsight.UpdateFailed, Detail: "fetch falhou"},
+		},
+	}, nil
+}
+
+type fakeRepoCloner struct {
+	plan   corerepoclone.Plan
+	result corerepoclone.Result
+}
+
+func (f fakeRepoCloner) Discover(context.Context, string) (corerepoclone.Plan, error) {
+	return f.plan, nil
+}
+
+func (f fakeRepoCloner) Resolve(context.Context, corerepoclone.Source, string) (corerepoclone.Repository, error) {
+	return corerepoclone.Repository{
+		Owner: "banco-bradesco", Name: "pagamentos-extra",
+		CloneURL: "https://github.com/banco-bradesco/pagamentos-extra",
+	}, nil
+}
+
+func (f fakeRepoCloner) Clone(context.Context, corerepoclone.Plan) (corerepoclone.Result, error) {
+	return f.result, nil
 }
 
 // --- Fixtures ----------------------------------------------------------
@@ -236,6 +306,86 @@ func tokensFixture() coretokens.Report {
 	}
 }
 
+func repoCloneFixture() corerepoclone.Plan {
+	source := corerepoclone.Source{
+		Owner: "banco-bradesco", Repository: "pagamentos", Prefix: "pagamentos",
+	}
+	names := []string{
+		"pagamentos", "pagamentos-config", "pagamentos-worker",
+		"pagamentos-integracao-legado", "pagamentos-observabilidade",
+	}
+	repos := make([]corerepoclone.Repository, 0, len(names))
+	for i, name := range names {
+		repos = append(repos, corerepoclone.Repository{
+			Owner: "banco-bradesco", Name: name,
+			CloneURL:      "https://github.com/banco-bradesco/" + name,
+			Description:   "Serviço da família de pagamentos responsável por integração e conciliação.",
+			Visibility:    []string{"PRIVATE", "INTERNAL", "PUBLIC"}[i%3],
+			Language:      []string{"Java", "Kotlin", "Go"}[i%3],
+			DefaultBranch: "main",
+			UpdatedAt:     fixedNow().AddDate(0, 0, -i),
+			DiskUsageKB:   1536 * (i + 1),
+			Archived:      i == len(names)-1,
+		})
+	}
+	return corerepoclone.Plan{
+		Source: source, Destination: "/Users/mateus/dev/pagamentos",
+		Repositories: repos,
+	}
+}
+
+func gitInsightFixture() coregitinsight.Report {
+	branch := func(name, upstream string, current bool, ahead, behind int, subject string) coregitinsight.Branch {
+		remote := ""
+		if upstream != "" {
+			remote = "origin"
+		}
+		return coregitinsight.Branch{
+			Name: name, Upstream: upstream, Remote: remote,
+			RemoteRef: "refs/heads/" + name, Current: current,
+			Ahead: ahead, Behind: behind, Hash: "a1b2c3d",
+			Subject: subject, CommittedAt: fixedNow().Add(-time.Duration(ahead+behind) * time.Hour),
+		}
+	}
+	return coregitinsight.Report{
+		Root:      "/Users/mateus/dev",
+		ScannedAt: fixedNow(),
+		Repositories: []coregitinsight.Repository{
+			{
+				Name: "pagamentos", Relative: "pagamentos/pagamentos",
+				Path: "/Users/mateus/dev/pagamentos/pagamentos", DirtyFiles: 3,
+				Branches: []coregitinsight.Branch{
+					branch("main", "origin/main", true, 2, 1, "corrige conciliação de pagamentos"),
+					branch("feature/pix-agendado", "origin/feature/pix-agendado", false, 4, 0, "adiciona pix agendado"),
+					branch("feature/pronta", "origin/feature/pronta", false, 0, 2, "feature já publicada"),
+					branch("rascunho-local", "", false, 0, 0, "experimento sem upstream"),
+				},
+			},
+			{
+				Name: "pagamentos-config", Relative: "pagamentos/pagamentos-config",
+				Path: "/Users/mateus/dev/pagamentos/pagamentos-config",
+				Branches: []coregitinsight.Branch{
+					branch("main", "origin/main", true, 0, 0, "atualiza configurações"),
+					branch("release/2026.07", "origin/release/2026.07", false, 0, 0, "release publicada"),
+				},
+			},
+			{
+				Name: "clientes", Relative: "clientes/clientes-api",
+				Path: "/Users/mateus/dev/clientes/clientes-api",
+				Branches: []coregitinsight.Branch{
+					branch("main", "origin/main", true, 0, 0, "release estável"),
+					{Name: "legado", Upstream: "origin/legado", Gone: true, Hash: "d4e5f6a", Subject: "branch removida no remoto"},
+				},
+			},
+			{
+				Name: "fraudes", Relative: "fraudes/motor-fraudes",
+				Path: "/Users/mateus/dev/fraudes/motor-fraudes",
+				Err:  "fatal: referência inválida",
+			},
+		},
+	}
+}
+
 // --- Tabela de telas ---------------------------------------------------
 
 type screenCase struct {
@@ -246,11 +396,11 @@ type screenCase struct {
 	keys []string
 }
 
-var cases = []screenCase{
+var cases = append([]screenCase{
 	{
 		name: "sysinfo",
 		build: func(t *testing.T) tui.Screen {
-			return settle(t, sysinfo.New(deps(), fakeInspector{snap: sysinfoFixture()}))
+			return settle(t, sysinfo.New(deps(), fakeInspector{snap: sysinfoFixture()}, fixedNow))
 		},
 	},
 	{
@@ -293,7 +443,7 @@ var cases = []screenCase{
 	{
 		name: "atualizar",
 		build: func(t *testing.T) tui.Screen {
-			return settle(t, update.New(deps(), fakeUpdater{status: updateFixture()}))
+			return settle(t, update.New(deps(), fakeUpdater{status: updateFixture()}, "", fixedNow))
 		},
 	},
 	{
@@ -309,7 +459,7 @@ var cases = []screenCase{
 				Branch:     "main",
 			}
 			st.State = coreselfupdate.StateAhead
-			return settle(t, update.New(deps(), fakeUpdater{status: st}))
+			return settle(t, update.New(deps(), fakeUpdater{status: st}, "", fixedNow))
 		},
 	},
 	{
@@ -318,7 +468,7 @@ var cases = []screenCase{
 		name: "atualizar sem rede",
 		build: func(t *testing.T) tui.Screen {
 			err := errors.New("Get \"https://api.github.com/repos/mateuslh/lealing/releases/latest\": dial tcp: lookup api.github.com: no such host")
-			return settle(t, update.New(deps(), fakeUpdater{err: err}))
+			return settle(t, update.New(deps(), fakeUpdater{err: err}, "", fixedNow))
 		},
 	},
 	{
@@ -349,6 +499,151 @@ var cases = []screenCase{
 			return settle(t, ccaccount.New(deps(), fakeSwitcher{}, fixedNow))
 		},
 	},
+	{
+		name: "clone repo revisão",
+		build: func(t *testing.T) tui.Screen {
+			return cloneRepoPreview(t)
+		},
+		keys: []string{"down", " ", "down", "d", "up"},
+	},
+	{
+		name: "clone repo adicionando",
+		build: func(t *testing.T) tui.Screen {
+			return cloneRepoPreview(t)
+		},
+		keys: []string{"a", "p", "a", "g", "a", "m", "e", "n", "t", "o", "s", "-", "extra"},
+	},
+	{
+		name: "clone repo executando",
+		build: func(t *testing.T) tui.Screen {
+			return cloneRepoPreview(t)
+		},
+		keys: []string{"enter"},
+	},
+	{
+		name: "radar git",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"down", "pgdown"},
+	},
+	{
+		name: "radar git para push",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"right", "down", "pgdown"},
+	},
+	{
+		name: "radar git locais publicadas",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"3", "down"},
+	},
+	{
+		name: "radar git alterados",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"5"},
+	},
+	{
+		name: "radar git escolhendo push",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"p", "down"},
+	},
+	{
+		name: "radar git confirmando limpeza",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"d", "enter"},
+	},
+	{
+		name: "radar git confirmando atualização geral",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"u"},
+	},
+	{
+		name: "radar git atualizando todos",
+		build: func(t *testing.T) tui.Screen {
+			return settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+		},
+		keys: []string{"u", "enter"},
+	},
+	{
+		name: "radar git resultado da atualização",
+		build: func(t *testing.T) tui.Screen {
+			return gitUpdateResults(t)
+		},
+		keys: []string{"down"},
+	},
+	{
+		name: "pré-requisitos",
+		build: func(t *testing.T) tui.Screen {
+			tool := domain.Tool{ID: "clone-repo-bradesco", Name: "Clone Repo Bradesco"}
+			missing := []domain.Requirement{
+				{Executable: "git", Name: "Git", InstallHint: "instale o Git e adicione `git` ao PATH"},
+				{Executable: "gh", Name: "GitHub CLI", InstallHint: "instale o GitHub CLI e rode `gh auth login`"},
+			}
+			return requirements.New(deps(), tool, missing)
+		},
+	},
+}, devkitScreenCases()...)
+
+func devkitScreenCases() []screenCase {
+	definitions := coredevkit.Definitions()
+	out := make([]screenCase, 0, len(definitions))
+	for _, definition := range definitions {
+		definition := definition
+		out = append(out, screenCase{
+			name: "devkit " + definition.ToolID,
+			build: func(t *testing.T) tui.Screen {
+				screen := tui.Screen(devkitscreen.New(deps(), fakeDevkitRunner{}, definition))
+				next, cmd := screen.Update(keyMsg("enter"))
+				if cmd == nil {
+					t.Fatal("executar tool não devolveu comando")
+				}
+				next, _ = next.Update(cmd())
+				return next
+			},
+			keys: []string{"down", "pgdown", "up"},
+		})
+	}
+	return out
+}
+
+func cloneRepoPreview(t *testing.T) tui.Screen {
+	t.Helper()
+	s := tui.Screen(repoclone.New(deps(), fakeRepoCloner{plan: repoCloneFixture()}))
+	for _, r := range "git@github.com:banco-bradesco/pagamentos.git" {
+		s, _ = s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	var cmd tea.Cmd
+	s, cmd = s.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("buscar não devolveu comando")
+	}
+	s, _ = s.Update(cmd())
+	return s
+}
+
+func gitUpdateResults(t *testing.T) tui.Screen {
+	t.Helper()
+	s := settle(t, gitinsight.New(deps(), fakeGitScanner{report: gitInsightFixture()}))
+	s, _ = s.Update(keyMsg("u"))
+	var cmd tea.Cmd
+	s, cmd = s.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("atualização geral não devolveu comando")
+	}
+	s, _ = s.Update(cmd())
+	return s
 }
 
 // settle executa o Init e entrega a mensagem resultante à tela.

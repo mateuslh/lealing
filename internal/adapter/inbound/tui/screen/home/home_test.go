@@ -1,6 +1,7 @@
 package home
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,9 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/search"
 	"github.com/mateuslh/lealing/internal/catalog"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/core/port/inbound"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
 )
 
@@ -25,19 +28,28 @@ import (
 
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
+	return newTestModelWith(t, nil)
+}
 
-	clock := port.ClockFunc(func() time.Time {
+// newTestModelWith monta a home com um conjunto de telas nativas. Passar
+// telas é o que distingue "abrir dentro da TUI" de "despachar ao Launcher".
+func newTestModelWith(t *testing.T, screens tui.Screens) *Model {
+	t.Helper()
+
+	clock := outbound.ClockFunc(func() time.Time {
 		return time.Date(2026, 7, 30, 15, 0, 0, 0, time.UTC)
 	})
 
 	repo := registry.New(catalog.Providers(), registry.WithStrict(true))
-	svc := service.NewCatalog(repo, search.NewFuzzy(clock, nil), persistence.NewMemoryUsage(), clock)
+	svc := service.NewCatalog(repo, search.NewFuzzy(), persistence.NewMemoryUsage(), clock)
 
 	m := New(Config{
-		Deps:    tui.Deps{Theme: theme.Default()},
-		Catalog: svc,
-		Prefs:   svc,
-		Clock:   clock,
+		Deps:          tui.Deps{Theme: theme.Default()},
+		Catalog:       svc,
+		Prefs:         svc,
+		Prerequisites: service.NewPrerequisites(repo, nil),
+		Now:           clock.Now,
+		Screens:       screens,
 	})
 
 	// Executa a carga inicial de forma síncrona.
@@ -64,6 +76,12 @@ func press(t *testing.T, m *Model, key string) (*Model, tea.Cmd) {
 		msg = tea.KeyMsg{Type: tea.KeyEnter}
 	case "down":
 		msg = tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+	case "left":
+		msg = tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		msg = tea.KeyMsg{Type: tea.KeyRight}
 	case "tab":
 		msg = tea.KeyMsg{Type: tea.KeyTab}
 	default:
@@ -132,11 +150,11 @@ func TestCatalogoEmbutidoValida(t *testing.T) {
 
 	// Toda tool declarada precisa ter uma tela ou um runner; a contagem
 	// aqui trava o acervo contra remoção acidental.
-	if m.highlights.TotalTools != 5 {
-		t.Errorf("tools = %d, quero 5", m.highlights.TotalTools)
+	if m.highlights.TotalTools != 15 {
+		t.Errorf("tools = %d, quero 15", m.highlights.TotalTools)
 	}
-	if m.highlights.TotalCategories != 3 {
-		t.Errorf("categorias povoadas = %d, quero 3", m.highlights.TotalCategories)
+	if m.highlights.TotalCategories != 5 {
+		t.Errorf("categorias povoadas = %d, quero 5", m.highlights.TotalCategories)
 	}
 }
 
@@ -224,6 +242,98 @@ func TestNavegacaoEntrePaineis(t *testing.T) {
 	}
 }
 
+func TestRecentesExcedentesVaoParaSugeridas(t *testing.T) {
+	m := newTestModel(t)
+	highlights := m.highlights
+	highlights.Recent = make([]domain.Match, 5)
+	for i := range highlights.Recent {
+		highlights.Recent[i].Tool.ID = domain.ToolID(string(rune('a' + i)))
+	}
+
+	// Remove o item sintético "Todas": catalogMsg recebe apenas as
+	// categorias reais devolvidas pela porta.
+	categories := append([]inbound.CategoryView(nil), m.categories[1:]...)
+	next, _ := m.Update(catalogMsg{highlights: highlights, categories: categories})
+	m = next.(*Model)
+
+	if got := len(m.highlights.Recent); got != recentLimit {
+		t.Fatalf("recentes = %d, quero %d", got, recentLimit)
+	}
+	if got := m.highlights.Suggested[0].Tool.ID; got != "d" {
+		t.Errorf("primeira sugerida = %q, quero o quarto recente", got)
+	}
+	if got := m.highlights.Suggested[1].Tool.ID; got != "e" {
+		t.Errorf("segunda sugerida = %q, quero o quinto recente", got)
+	}
+}
+
+func TestBuscaEAcessivelSomenteComSetas(t *testing.T) {
+	m := newTestModel(t)
+	m.focus = zoneSuggested
+	m.cursor[zoneSuggested] = 0
+
+	m, _ = press(t, m, "up")
+	if m.focus != zoneSearch {
+		t.Fatalf("subir do primeiro item focou %d, quero a busca", m.focus)
+	}
+
+	m, _ = press(t, m, "enter")
+	if !m.searching || !m.Capturing() {
+		t.Fatal("Enter na barra não ativou a digitação")
+	}
+
+	m, _ = press(t, m, "esc")
+	if m.focus != zoneSearch {
+		t.Fatalf("Esc saiu da busca para %d, quero manter a barra focada", m.focus)
+	}
+
+	m, _ = press(t, m, "down")
+	if m.focus != zoneSuggested {
+		t.Fatalf("descer da busca focou %d, quero o catálogo", m.focus)
+	}
+}
+
+func TestSidebarFiltraCatalogoAoMoverSelecao(t *testing.T) {
+	m := newTestModel(t)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 38})
+	m = next.(*Model)
+	m.focus = zoneSidebar
+
+	// "Todas" ocupa a primeira linha; a seta já seleciona Sistema e dispara
+	// a consulta sem exigir Enter.
+	var cmd tea.Cmd
+	m, cmd = press(t, m, "down")
+	if cmd == nil {
+		t.Fatal("mover para Sistema não disparou o filtro")
+	}
+	m = apply(t, m, cmd)
+
+	category, ok := m.selectedCategory()
+	if !ok || category.ID != "system" {
+		t.Fatalf("categoria selecionada = %q, quero system", category.ID)
+	}
+	if m.filterPage.Total != 2 {
+		t.Fatalf("Sistema trouxe %d tools, quero 2", m.filterPage.Total)
+	}
+	for _, item := range m.filterPage.Items {
+		if item.Tool.Category != category.ID {
+			t.Errorf("filtro system deixou passar %s (%s)", item.Tool.ID, item.Tool.Category)
+		}
+	}
+
+	m, cmd = press(t, m, "down")
+	m = apply(t, m, cmd)
+	category, ok = m.selectedCategory()
+	if !ok || category.ID != "ai" {
+		t.Fatalf("segunda seleção = %q, quero ai", category.ID)
+	}
+	for _, item := range m.filterPage.Items {
+		if item.Tool.Category != category.ID {
+			t.Errorf("filtro ai deixou passar %s (%s)", item.Tool.ID, item.Tool.Category)
+		}
+	}
+}
+
 func TestCursorNaoEstouraEmPainelVazio(t *testing.T) {
 	m := newTestModel(t)
 	m.focus = zoneFavorites // vazio na primeira execução
@@ -258,6 +368,12 @@ func TestViewNuncaEstouraOFrame(t *testing.T) {
 		"busca": func(t *testing.T, m *Model) *Model {
 			m, _ = press(t, m, "/")
 			return typeText(t, m, "sistema")
+		},
+		"categoria": func(t *testing.T, m *Model) *Model {
+			m.focus = zoneSidebar
+			var cmd tea.Cmd
+			m, cmd = press(t, m, "down")
+			return apply(t, m, cmd)
 		},
 	}
 
@@ -334,5 +450,106 @@ func TestSaudacaoSegueAHora(t *testing.T) {
 		if !strings.HasSuffix(got, "mateuslh") {
 			t.Errorf("saudação %q não inclui o usuário", got)
 		}
+	}
+}
+
+// stubScreen é a tela mínima que satisfaz tui.Screen. Serve só para dar à
+// tool um destino dentro da TUI — o que ela desenha é irrelevante aqui.
+type stubScreen struct{}
+
+func (stubScreen) ID() tui.ScreenID                       { return "stub" }
+func (stubScreen) Title() string                          { return "stub" }
+func (stubScreen) Init() tea.Cmd                          { return nil }
+func (s stubScreen) Update(tea.Msg) (tui.Screen, tea.Cmd) { return s, nil }
+func (stubScreen) View(tui.Frame) string                  { return "" }
+func (stubScreen) Hints() []tui.Hint                      { return nil }
+
+// Abrir uma tool nativa é o único uso que ela jamais registra: não há runner
+// que a atenda, então quem não contabilizar aqui deixa "recentes" vazio para
+// sempre — que era o bug.
+func TestAbrirToolNativaAlimentaRecentes(t *testing.T) {
+	const id = "system-info"
+	m := newTestModelWith(t, tui.Screens{id: func() tui.Screen { return stubScreen{} }})
+
+	if len(m.highlights.Recent) != 0 {
+		t.Fatalf("recentes começou com %d itens, quero 0", len(m.highlights.Recent))
+	}
+
+	// Na primeira execução tudo está em "sugeridas": nada foi usado ainda.
+	var tool domain.Tool
+	for _, s := range m.highlights.Suggested {
+		if s.Tool.ID == id {
+			tool = s.Tool
+		}
+	}
+	if tool.ID == "" {
+		t.Fatalf("tool %s não apareceu em sugeridas", id)
+	}
+
+	// Abrir navega e contabiliza; só a contabilização interessa aqui.
+	m = apply(t, m, m.openTool(tool))
+
+	// A confirmação chega com a tela da tool já no topo, então na TUI real é
+	// o Refresh do Router que recarrega a home. Reproduz-se o mesmo gesto.
+	m = apply(t, m, m.Refresh())
+
+	if len(m.highlights.Recent) != 1 {
+		t.Fatalf("recentes = %d itens, quero 1", len(m.highlights.Recent))
+	}
+	if got := m.highlights.Recent[0].Tool.ID; got != id {
+		t.Errorf("recentes[0] = %s, quero %s", got, id)
+	}
+}
+
+// O App descobre o Refresh por type assertion: perder o método não quebra a
+// compilação, só faz a home voltar de uma tool com os dados de antes.
+func TestHomeExpoeRefresh(t *testing.T) {
+	var _ interface{ Refresh() tea.Cmd } = (*Model)(nil)
+}
+
+type requirementCheckerStub struct{ missing []domain.Requirement }
+
+func (s requirementCheckerStub) Missing(
+	context.Context,
+	domain.ToolID,
+) ([]domain.Requirement, error) {
+	return s.missing, nil
+}
+
+func TestToolComRequisitoAusenteAbreDiagnostico(t *testing.T) {
+	const id = domain.ToolID("clone-repo-bradesco")
+	m := newTestModelWith(t, tui.Screens{id: func() tui.Screen { return stubScreen{} }})
+	m.prereqs = requirementCheckerStub{missing: []domain.Requirement{
+		{Executable: "gh", Name: "GitHub CLI"},
+	}}
+
+	var tool domain.Tool
+	for _, candidate := range m.highlights.Suggested {
+		if candidate.Tool.ID == id {
+			tool = candidate.Tool
+			break
+		}
+	}
+	if tool.ID == "" {
+		t.Fatal("clone-repo-bradesco não apareceu no catálogo")
+	}
+
+	check := m.openTool(tool)
+	checkMsg := check()
+	msg, ok := checkMsg.(requirementsMsg)
+	if !ok {
+		t.Fatalf("checagem devolveu %T", checkMsg)
+	}
+	_, navigate := m.Update(msg)
+	if navigate == nil {
+		t.Fatal("requisito ausente não abriu diagnóstico")
+	}
+	navigateMsg := navigate()
+	nav, ok := navigateMsg.(tui.NavigateMsg)
+	if !ok {
+		t.Fatalf("comando devolveu %T", navigateMsg)
+	}
+	if !strings.Contains(string(nav.Screen.ID()), "requirements") {
+		t.Fatalf("tela = %s", nav.Screen.ID())
 	}
 }

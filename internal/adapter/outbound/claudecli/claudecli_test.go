@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -144,7 +143,7 @@ func TestFileVaultGuardaSomenteParaODono(t *testing.T) {
 	}
 	// No Windows o modo é sintético e este bit não significa nada; a
 	// verificação vale onde a permissão é real.
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+	if os.PathSeparator != '\\' && info.Mode().Perm() != 0o600 {
 		t.Errorf("credencial gravada com permissão %v", info.Mode().Perm())
 	}
 }

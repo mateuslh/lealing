@@ -1,11 +1,72 @@
-# Criando tools no lealing — guia para agentes
+# Criando tools no lealing — contrato para agentes de IA
 
-Este documento é o contrato. Siga-o literalmente e a tool funciona; desvie e
-o `registry` recusa a carga ou o teste de geometria falha.
+Este documento é o contrato operacional para alterar o lealing. Ele descreve
+o fluxo completo, as fronteiras da arquitetura hexagonal e a definição de
+pronto. Não improvise outra organização: `internal/architecture` protege as
+dependências em CI, o bootstrap valida a ligação do catálogo e os testes de
+geometria validam a TUI.
 
-**Antes de começar, rode `make test`.** Se já estiver quebrado, conserte ou
-reporte antes de adicionar código — você precisa de uma linha de base verde
-para saber que foi você quem quebrou algo.
+## 0. Protocolo obrigatório
+
+Antes de editar qualquer arquivo:
+
+1. rode `git status --short` e preserve alterações que já existiam;
+2. rode `make test`;
+3. se a linha de base falhar, corrija a causa ou reporte o bloqueio antes de
+   adicionar a tool;
+4. leia uma tool de referência inteira, incluindo core, adapter, tela,
+   bootstrap e testes;
+5. só então implemente de dentro para fora.
+
+Não use um teste final para descobrir que a base já estava quebrada. Não
+apague nem reverta alterações locais que não pertencem à tarefa.
+
+## Fronteiras que nenhuma tool pode atravessar
+
+```text
+driving adapter (TUI)
+        │ chama
+        ▼
+core/port/inbound ──► casos de uso em core
+                              │ consomem
+                              ▼
+                     core/port/outbound
+                              ▲ implementam
+                              │
+                    driven adapters (disco, rede, processos)
+
+bootstrap = único lugar que conhece e liga implementações concretas
+```
+
+As regras são literais:
+
+- `internal/core/**` só importa biblioteca padrão e outros pacotes
+  `internal/core/**`;
+- a TUI pode importar domínio e portas de entrada, mas nunca
+  `core/port/outbound` nem `adapter/outbound`;
+- um adapter de saída implementa uma porta do core e nunca importa a TUI,
+  o catálogo, o bootstrap ou outro adapter de saída;
+- adapters não se constroem entre si: composição pertence a
+  `internal/bootstrap`;
+- `runtime.GOOS` e `runtime.GOARCH` só aparecem em
+  `internal/bootstrap/platform.go`;
+- caminhos, home, relógio, target e clientes variáveis entram por construtor;
+  um adapter não deve esconder seleção de plataforma ou configuração global;
+- `Update` e `View` são funções de estado/render: não leem arquivo, ambiente,
+  rede ou processo e não chamam portas. Todo I/O fica dentro de `tea.Cmd`;
+- não existe fallback que simula sucesso. Tool sem tela ou runner faz o
+  bootstrap falhar em `validateWiring`.
+
+Portas compartilhadas ficam separadas em:
+
+- `internal/core/port/inbound`: casos de uso consumidos por driving adapters;
+- `internal/core/port/outbound`: recursos consumidos pelo core e
+  implementados por driven adapters.
+
+Portas específicas de uma tool podem ficar em `internal/core/<tool>`, mas
+nomeie e comente os dois lados sem ambiguidade: a tela consome a porta de
+entrada; o serviço implementa essa porta e consome a porta de saída. Mesmo um
+caso de uso fino é preferível a ligar TUI diretamente a disco ou processo.
 
 ---
 
@@ -13,13 +74,14 @@ para saber que foi você quem quebrou algo.
 
 | Tipo | Quando | `Kind` | O que você escreve |
 |---|---|---|---|
-| **Nativa** | A tool tem interface própria dentro da TUI | `KindBuiltin` | Um pacote de núcleo, um adapter e uma tela |
-| **Processo** | A tool é um binário externo | `KindProcess` | Só a declaração no catálogo |
-| **Script** | A tool é um script interpretado | `KindScript` | Só a declaração no catálogo |
-| **Remota** | A tool fala com um serviço | `KindRemote` | Declaração + adapter da porta |
+| **Nativa** | A tool tem interface própria dentro da TUI | `KindBuiltin` | Core + caso de uso + adapter de saída + tela + composição |
+| **Processo** | A tool é um binário externo | `KindProcess` | Catálogo + runner/resolver tipado + composição |
+| **Script** | A tool é um script interpretado | `KindScript` | Catálogo + runner/resolver tipado + composição |
+| **Remota** | A tool fala com um serviço | `KindRemote` | Core + cliente de saída + caso de uso + runner ou tela |
 
-As tools atuais são todas nativas. **Se em dúvida, leia `system-info` inteiro
-primeiro** — é a mais simples e tem todas as peças.
+As tools atuais são nativas. Para uma leitura mínima, comece por
+`system-info`; para ver política e suporte parcial, leia `power`; para
+orquestração com vários recursos externos, leia `repoclone`.
 
 ---
 
@@ -44,6 +106,37 @@ Confira a matriz do acervo a qualquer momento:
 lealing -platforms
 ```
 
+### Se a tool depende de outro executável
+
+Declare cada ferramenta obrigatória no próprio item do catálogo:
+
+```go
+Requirements: []domain.Requirement{
+    {
+        Executable:  "gh",
+        Name:        "GitHub CLI",
+        InstallHint: "instale o GitHub CLI e rode `gh auth login`",
+    },
+},
+```
+
+`Executable` é somente o nome procurado no `PATH`: sem caminho, argumentos ou
+comando de shell. `Name` é o rótulo amigável e pode ser omitido;
+`InstallHint` diz como resolver a ausência. O registry recusa requisito vazio,
+duplicado ou com argumentos.
+
+A home pede essa decisão à porta de entrada `inbound.Prerequisites`. O
+`PrerequisiteService` resolve a tool e consulta `outbound.RequirementChecker`;
+a TUI nunca chama o checker diretamente. Se algo faltar, abre a tela genérica
+de pré-requisitos com o nome da tool e todas as ferramentas ausentes.
+**Não repita a checagem na tela ou no adapter e não tente instalar
+automaticamente.**
+
+Use esta spec para executáveis portáveis (`git`, `gh`, `docker`). Aplicações
+descobertas por arquivo ou configuração — como uma IDE — continuam sendo
+validadas pelo adapter no momento em que ele usa essa integração, porque não
+há um nome de `PATH` estável entre macOS e Windows.
+
 ### Se a tool precisa de um adapter nativo
 
 Três regras, nesta ordem:
@@ -52,11 +145,15 @@ Três regras, nesta ordem:
    `outbound/windows` compilam em qualquer lugar — o que é específico é o
    processo que eles disparam, não o código Go. É isso que permite testar o
    parser do Windows na mesma suíte que roda no Mac.
-2. **Registre o adapter em `bootstrap/platform.go`.** É o único switch por
-   sistema operacional do programa. Um campo `nil` ali com a tool declarada
-   como suportada no catálogo abre uma tela que estoura no primeiro `Read` —
-   os dois lados precisam concordar.
-3. **Exporte o parser e teste-o com uma amostra real.** `ParseCustom` (pmset),
+2. **O adapter não instancia outro adapter.** Se GitHub e IntelliJ participam
+   do mesmo fluxo, o bootstrap constrói os dois e os entrega ao caso de uso.
+3. **Registre em `bootstrap/platform.go`.** É o único switch por sistema
+   operacional e o único arquivo que lê `runtime.GOOS`/`GOARCH`.
+   `validateWiring` confere a composição antes de abrir a TUI.
+4. **Injete configuração.** Home, diretórios, relógio, arquitetura e caminhos
+   nativos são parâmetros; não chame `os.UserHomeDir` ou detecte a plataforma
+   escondido num construtor.
+5. **Exporte o parser e teste-o com uma amostra real.** `ParseCustom` (pmset),
    `ParseSettings` (powercfg) e `ParseSnapshot` (WMI) existem exatamente para
    isso. Cole a saída verdadeira do comando no teste; é a única forma de pegar
    um formato que mudou.
@@ -91,13 +188,15 @@ mostrar nenhum controle diferente.
 | `power-control` | ✓ | parcial | `powercfg` não tem Power Nap, standby, `tcpkeepalive` nem hibernação; e não pede elevação, então não há senha a dispensar |
 | `token-usage` | ✓ | ✓ | lê os logs das CLIs, iguais nos dois |
 | `self-update` | ✓ | ✓ | releases do GitHub; `git` + `go build` no clone |
+| `clone-repo-bradesco` | ✓ | ✓ | GitHub CLI + Git; registra clones no IntelliJ |
+| `git-dev-radar` | ✓ | ✓ | leitura recursiva dos clones e branches em `~/dev` |
 
 ---
 
-## 3. Tool de processo (o caminho curto)
+## 3. Tool de processo ou script
 
-Adicione uma entrada em `internal/catalog/catalog.go`, dentro de
-`Builtin.Provide`:
+O caminho é curto, mas não é só catálogo. Adicione a entrada em
+`internal/catalog/catalog.go`, dentro de `Builtin.Provide`:
 
 ```go
 {
@@ -114,8 +213,23 @@ Adicione uma entrada em `internal/catalog/catalog.go`, dentro de
 },
 ```
 
-Depois **registre o runner** em `internal/bootstrap/bootstrap.go`. Sem isso a
-tool aparece mas não faz nada (o `Placeholder` responde por ela).
+Depois implemente um `outbound.ToolRunner` ou configure `runner.Process` com
+um `CommandResolver` que:
+
+- resolva somente IDs conhecidos;
+- devolva executável e argumentos como tokens separados;
+- valide qualquer valor vindo do usuário;
+- nunca monte `sh -c`, `cmd /c` ou uma string de shell;
+- respeite o `context.Context`.
+
+Registre o runner na fatia `toolRunners` de
+`internal/bootstrap/bootstrap.go`. `validateWiring` recusa o arranque se uma
+tool não nativa não tiver runner para o seu `Kind`; não há `Placeholder` nem
+execução simulada.
+
+Se a tool precisar de regra de negócio, confirmação específica, consulta
+prévia ou mais de um recurso externo, ela deixou de ser “só processo”: crie
+um caso de uso no core e um runner fino que o invoque.
 
 ### Escolhendo o `Risk`
 
@@ -132,13 +246,16 @@ dados de alguém.** Na dúvida, suba um nível.
 
 ## 4. Tool nativa (o caminho completo)
 
-Quatro arquivos, nesta ordem. Não pule etapas nem inverta a ordem — cada uma
-depende da anterior compilar.
+Implemente nesta ordem: modelo e portas → caso de uso → adapter de saída →
+tela → composição → catálogo e testes. Cada passo só conhece os anteriores,
+por isso a direção de dependência permanece visível.
 
 ### 4.1 Núcleo — `internal/core/<tool>/<tool>.go`
 
-Tipos e a porta de saída. **Regra absoluta: este pacote não importa nada além
-da biblioteca padrão.** Sem `lipgloss`, sem `bubbletea`, sem `os/exec`.
+Tipos, regras puras, porta de entrada, porta de saída e o caso de uso.
+**Regra absoluta: este pacote só importa a biblioteca padrão ou outros
+pacotes do core.** Sem `lipgloss`, `bubbletea`, `os/exec`, cliente HTTP ou
+adapter.
 
 ```go
 // Package disco é o domínio da tool "Uso de Disco".
@@ -162,26 +279,52 @@ func (v Volume) UsedPercent() float64 {
     return float64(v.TotalBytes-v.FreeBytes) / float64(v.TotalBytes) * 100
 }
 
-// Reader é a porta de saída: alguém que sabe ler os volumes da máquina.
-type Reader interface {
+// Source é a porta de saída que o core pede ao sistema.
+type Source interface {
     Volumes(ctx context.Context) ([]Volume, error)
+}
+
+// Reader é a porta de entrada que a tela pode pedir à aplicação.
+type Reader interface {
+    List(ctx context.Context) ([]Volume, error)
+}
+
+// Service implementa o caso de uso sem conhecer terminal nem sistema.
+type Service struct {
+    source Source
+}
+
+var _ Reader = (*Service)(nil)
+
+func NewService(source Source) *Service {
+    return &Service{source: source}
+}
+
+func (s *Service) List(ctx context.Context) ([]Volume, error) {
+    volumes, err := s.source.Volumes(ctx)
+    if err != nil {
+        return nil, err
+    }
+    // Ordenação, filtragem e políticas pertencem aqui.
+    return volumes, nil
 }
 ```
 
 Cálculos derivados (`UsedPercent`) ficam **aqui**, não na tela. É o que
-permite testá-los sem renderizar nada.
+permite testá-los sem renderizar nada. Orquestração, validação e política
+ficam no `Service`, não no adapter.
 
 ### 4.2 Adapter — `internal/adapter/outbound/<plataforma>/<tool>.go`
 
-Implementa a porta falando com o mundo real. Um arquivo por plataforma que a
-tool declara suportar — ver a seção 2.
+Implementa **a porta de saída** falando com o mundo real. Um arquivo por
+plataforma que a tool declara suportar — ver a seção 2.
 
 ```go
-type DiskReader struct{}
+type DiskSource struct{}
 
-var _ disco.Reader = (*DiskReader)(nil)   // trava o contrato em compile-time
+var _ disco.Source = (*DiskSource)(nil) // trava o contrato em compile-time
 
-func (d *DiskReader) Volumes(ctx context.Context) ([]disco.Volume, error) {
+func (d *DiskSource) Volumes(ctx context.Context) ([]disco.Volume, error) {
     out, err := run(ctx, "/bin/df", "-k")
     if err != nil {
         return nil, err
@@ -194,7 +337,7 @@ func (d *DiskReader) Volumes(ctx context.Context) ([]disco.Volume, error) {
 permite testá-la com uma string fixa, sem tocar no sistema. Veja
 `macos.ParseCustom` e `macos/power_test.go`.
 
-Três regras para adapters:
+Cinco regras para adapters:
 
 1. **Campo ilegível vira valor padrão, não erro.** Uma tela que se recusa a
    abrir porque um `sysctl` sumiu é pior que uma tela com um traço.
@@ -203,6 +346,10 @@ Três regras para adapters:
 3. **Nada de entrada do usuário em linha de shell.** Se precisar montar um
    comando, gere os tokens você mesmo e valide o que vier de fora — veja
    `safeUserName` em `macos/power.go`.
+4. **Nenhuma regra editorial ou de layout.** O adapter traduz formatos e
+   devolve tipos do core; não escolhe cor, rótulo de painel ou atalho.
+5. **Nenhuma composição.** Dependências adicionais entram no construtor e
+   são ligadas pelo bootstrap.
 
 ### 4.3 Tela — `internal/adapter/inbound/tui/screen/<tool>/<tool>.go`
 
@@ -211,7 +358,7 @@ Implemente `tui.Screen`:
 ```go
 type Model struct {
     deps   tui.Deps
-    reader disco.Reader     // a PORTA, nunca o adapter concreto
+    reader disco.Reader // porta de entrada, nunca adapter concreto
     // ...
 }
 
@@ -235,7 +382,7 @@ func (m *Model) load() tea.Cmd {
     return func() tea.Msg {
         ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
         defer cancel()
-        vols, err := reader.Volumes(ctx)
+        vols, err := reader.List(ctx)
         return loadedMsg{volumes: vols, err: err}
     }
 }
@@ -247,6 +394,11 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
     return m, nil
 }
 ```
+
+A tela pode importar `core/<tool>` e `core/port/inbound`. Ela não pode
+importar `core/port/outbound`, `adapter/outbound`, `bootstrap` ou `catalog`.
+Se você precisar de algo desses pacotes, falta um caso de uso ou uma
+dependência no construtor.
 
 Métodos opcionais que enriquecem o chrome:
 
@@ -263,19 +415,40 @@ sem saída visível.
 ### 4.4 Ligação — `internal/bootstrap/bootstrap.go`
 
 ```go
-diskReader := macos.NewDiskReader()
+diskSource := macos.NewDiskSource()
+diskService := disco.NewService(diskSource)
 
 screens := tui.Screens{
     // ...
-    "disk-usage": func() tui.Screen { return discoscreen.New(deps, diskReader) },
+    "disk-usage": func() tui.Screen {
+        return discoscreen.New(deps, diskService)
+    },
 }
 ```
 
-A chave é o `ID` da tool no catálogo. **Se não bater, a tool abre o
-`Placeholder` e não faz nada** — e é exatamente esse o sintoma quando alguém
-esquece este passo.
+A chave é exatamente o `ID` permanente da tool no catálogo. O bootstrap roda
+`validateWiring` antes de construir a home: ID divergente, factory órfã, tool
+nativa sem tela ou processo sem runner são erros de inicialização claros.
 
 Por fim, declare a tool no catálogo (seção 3), com `Kind: domain.KindBuiltin`.
+
+Se houver escolha por plataforma, construa a dependência em
+`bootstrap/platform.go` e devolva a interface do core. Não espalhe
+`if platform == ...` por `bootstrap.go`, telas ou adapters.
+
+### 4.5 Testes por camada
+
+Uma tool nativa precisa, no mínimo, de:
+
+- teste puro das regras e cálculos do core;
+- teste do caso de uso com fakes das portas de saída;
+- teste do parser do adapter com uma amostra fixa e real;
+- teste de comportamento da tela com fake da porta de entrada;
+- caso no teste global de geometria;
+- composição aceita por `validateWiring` e pelo teste arquitetural.
+
+Teste adapter real apenas em smoke test separado. A suíte normal nunca depende
+de rede, credencial, `pmset`, `powercfg`, `git` ou arquivos da máquina.
 
 ---
 
@@ -344,8 +517,8 @@ Rode, nesta ordem, e não pare no primeiro sucesso:
 make fmt
 make vet
 make test
-make cross                              # compila nas plataformas suportadas
-make render SIZE=150x42                 # a home, com a tool nova na lista
+make cross                                     # compila nas plataformas suportadas
+make render SIZE=150x42                        # home com a tool nova
 make render SIZE=150x42 KEYS='/disco[enter]'   # a tela da tool
 make render SIZE=60x20  KEYS='/disco[enter]'   # e em janela estreita
 ```
@@ -361,6 +534,11 @@ entre colchetes: `[enter]`, `[esc]`, `[tab]`, `[up]`, `[down]`, `[left]`,
 
 **Olhe a saída de verdade.** Um teste verde só garante que nada transbordou;
 ele não sabe se as colunas ficaram alinhadas ou se o texto faz sentido.
+
+Se você adicionou goroutines, cache, canal ou escrita concorrente, rode também
+`make race`. Antes de entregar, confira `git diff --check` e `git status
+--short`; nenhum binário, log, fixture temporária ou credencial pode entrar no
+diff.
 
 ---
 
@@ -379,10 +557,17 @@ ele não sabe se as colunas ficaram alinhadas ou se o texto faz sentido.
 - **Nada de `panic` fora de `init`.** Uma tool quebrada degrada; ela não
   derruba o hub.
 - **Erros descem, nunca sobem para `stdout`.** A TUI ocupa o terminal:
-  qualquer `fmt.Println` corrompe o frame. Use `port.Logger`.
+  qualquer `fmt.Println` corrompe o frame. Use `outbound.Logger`.
+- **Driving adapter só chama porta de entrada.** Importar
+  `core/port/outbound` na TUI é erro arquitetural, mesmo que compile.
+- **Driven adapter não compõe driven adapter.** Receba interfaces no
+  construtor e ligue as implementações no bootstrap.
 - **Nada de `runtime.GOOS` fora de `bootstrap/platform.go`.** Quem decide o
   adapter é o composition root; espalhar o switch é como a lógica de
   plataforma vaza para o núcleo e para as telas.
+- **Nada de dependência global escondida.** Construtores recebem caminhos,
+  home, relógio e clientes relevantes; isso torna a escolha visível e
+  testável.
 - **Texto sem nome de sistema onde a tool serve os dois.** "a máquina", não
   "o Mac", no `Summary` de uma tool que roda nos dois — o `Detail` é o lugar
   de explicar a diferença.
@@ -391,6 +576,10 @@ ele não sabe se as colunas ficaram alinhadas ou se o texto faz sentido.
 
 | Dúvida | Arquivo |
 |---|---|
+| Regras de dependência executáveis | `internal/architecture/dependencies_test.go` |
+| Portas de entrada compartilhadas | `internal/core/port/inbound/inbound.go` |
+| Portas de saída compartilhadas | `internal/core/port/outbound/outbound.go` |
+| Caso de uso que orquestra portas | `internal/core/service/` |
 | Tela mínima, do zero | `screen/sysinfo/sysinfo.go` |
 | Tela com edição e confirmação | `screen/power/` |
 | Tela com dados agregados e gráficos | `screen/tokens/` |
@@ -398,6 +587,19 @@ ele não sabe se as colunas ficaram alinhadas ou se o texto faz sentido.
 | Adapter de uma segunda plataforma | `windows/power.go` + `windows/power_test.go` |
 | Porta com suporte parcial | `core/power/fields.go` (`Feature`, `Merge`) |
 | Escolha do adapter por sistema | `internal/bootstrap/platform.go` |
+| Validação catálogo ↔ tela ↔ runner | `internal/bootstrap/wiring.go` |
 | Matriz de suporte do acervo | `internal/bootstrap/matrix.go` · `lealing -platforms` |
 | Agregação e erro parcial | `core/tokens/tokens.go` |
 | Como tudo se conecta | `internal/bootstrap/bootstrap.go` |
+
+Antes de concluir, responda “sim” a todas:
+
+- o core compila sem importar framework ou infraestrutura?
+- a tela conhece só domínio e portas de entrada?
+- todo I/O da tela está dentro de `tea.Cmd` com timeout?
+- o caso de uso contém a política e o adapter apenas traduz o mundo externo?
+- toda dependência variável entra pelo construtor?
+- toda escolha de plataforma está em `bootstrap/platform.go`?
+- catálogo, factory e runner usam o mesmo ID e `Kind`?
+- parser, core, caso de uso, tela e geometria têm testes proporcionais?
+- `fmt`, `vet`, `test`, `cross` e os dois renders passaram?

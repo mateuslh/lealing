@@ -1,9 +1,6 @@
 package domain
 
-import (
-	"runtime"
-	"strings"
-)
+import "strings"
 
 // Platform é um conjunto de sistemas operacionais, não um só: uma tool
 // declara em quais roda, e a máquina atual é o conjunto de um elemento com
@@ -40,11 +37,6 @@ var platformNames = []struct {
 	{Windows, "windows", "Windows"},
 	{Linux, "linux", "Linux"},
 }
-
-// CurrentPlatform devolve a plataforma em que este binário está rodando.
-// Zero quando o GOOS não é nenhum dos declarados — o que faz toda tool que
-// não seja explicitamente portável sumir do catálogo, que é o lado seguro.
-func CurrentPlatform() Platform { return ParsePlatform(runtime.GOOS) }
 
 // ParsePlatform converte um GOOS ("darwin", "windows") na plataforma.
 // Devolve zero para valores desconhecidos.

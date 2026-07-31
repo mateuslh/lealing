@@ -4,7 +4,6 @@ package update
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -42,6 +41,8 @@ const (
 type Model struct {
 	deps    tui.Deps
 	manager selfupdate.Manager
+	home    string
+	now     func() time.Time
 
 	width, height int
 
@@ -53,9 +54,20 @@ type Model struct {
 
 var _ tui.Screen = (*Model)(nil)
 
-// New monta a tela.
-func New(deps tui.Deps, manager selfupdate.Manager) *Model {
-	return &Model{deps: deps, manager: manager, phase: phaseChecking}
+// New monta a tela com todas as dependências variáveis explícitas.
+func New(
+	deps tui.Deps,
+	manager selfupdate.Manager,
+	home string,
+	now func() time.Time,
+) *Model {
+	if now == nil {
+		now = time.Now
+	}
+	return &Model{
+		deps: deps, manager: manager, home: home,
+		now: now, phase: phaseChecking,
+	}
 }
 
 // ID implementa tui.Screen.
@@ -197,11 +209,11 @@ func (m *Model) installPanel(width int) string {
 	switch in.Mode {
 	case selfupdate.ModeSource:
 		rows = append(rows,
-			component.Row{Label: "Clone", Value: shortPath(in.RepoDir)},
+			component.Row{Label: "Clone", Value: shortPath(in.RepoDir, m.home)},
 			component.Row{Label: "Branch", Value: orDash(in.Branch)},
 		)
 	case selfupdate.ModeRelease:
-		row := component.Row{Label: "Binário", Value: shortPath(in.BinaryPath)}
+		row := component.Row{Label: "Binário", Value: shortPath(in.BinaryPath, m.home)}
 		if !in.Writable {
 			row.Hint = "somente leitura"
 			row.Tone = th.Warning
@@ -210,7 +222,7 @@ func (m *Model) installPanel(width int) string {
 	default:
 		rows = append(rows, component.Row{
 			Label: "Binário",
-			Value: shortPath(in.BinaryPath),
+			Value: shortPath(in.BinaryPath, m.home),
 			Hint:  "reinstale pelo install.sh para atualizar daqui",
 		})
 	}
@@ -241,7 +253,7 @@ func (m *Model) releasePanel(width int) string {
 		rows = append(rows, component.Row{
 			Label: "Publicado",
 			Value: rel.PublishedAt.Local().Format("02/01/2006"),
-			Hint:  humanAge(time.Since(rel.PublishedAt)),
+			Hint:  humanAge(m.now().Sub(rel.PublishedAt)),
 		})
 	}
 
@@ -367,11 +379,11 @@ func (m *Model) Status() (string, lipgloss.TerminalColor) {
 
 // shortPath troca o diretório do usuário por "~", que é como o usuário
 // reconhece o caminho e cabe em telas estreitas.
-func shortPath(p string) string {
+func shortPath(p, home string) string {
 	if p == "" {
 		return "—"
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home) {
+	if home != "" && strings.HasPrefix(p, home) {
 		return "~" + p[len(home):]
 	}
 	return p

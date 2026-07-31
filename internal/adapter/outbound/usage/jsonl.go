@@ -145,12 +145,3 @@ func projectOf(cwd string) string {
 	}
 	return "—"
 }
-
-// homePath resolve um caminho relativo ao diretório do usuário.
-func homePath(rel string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return rel
-	}
-	return filepath.Join(home, rel)
-}

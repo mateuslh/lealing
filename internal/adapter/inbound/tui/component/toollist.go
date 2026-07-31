@@ -77,8 +77,12 @@ func (l ToolList) renderItem(th *theme.Theme, m domain.Match, selected bool) []s
 
 	glyph := glyphStyle.Render(ToolGlyph(m.Tool, cat))
 
-	// Marcadores à direita: favorito e risco.
+	// Tags e marcadores ficam sempre na linha principal, inclusive quando a
+	// janela não tem altura para a linha detalhada.
 	var marks []string
+	for _, tag := range m.Tool.Tags {
+		marks = append(marks, th.MatchHint.Render("#"+string(tag)))
+	}
 	if m.Usage.Favorite {
 		marks = append(marks, lipgloss.NewStyle().Foreground(th.Warning).Render("★"))
 	}

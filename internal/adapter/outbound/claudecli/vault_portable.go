@@ -9,4 +9,6 @@ import "github.com/mateuslh/lealing/internal/core/ccaccount"
 // Fora do macOS — Windows e Linux — a CLI guarda a credencial no próprio
 // ~/.claude/.credentials.json, sem cofre do sistema. Não há chaveiro a
 // consultar, então o arquivo é o cofre.
-func NewVault() ccaccount.Vault { return NewFileVault() }
+func NewVault(credentialsPath string) ccaccount.Vault {
+	return NewFileVault(credentialsPath)
+}

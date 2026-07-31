@@ -1,15 +1,15 @@
 // Package home implementa a tela inicial do lealing.
 //
-// A home é a única tela que fala com três portas ao mesmo tempo (catálogo,
-// preferências e launcher), porque é onde o usuário decide o que fazer. Toda
-// a comunicação é assíncrona: nenhuma chamada de porta acontece dentro de
+// A home coordena as portas de entrada de catálogo, preferências, execução e
+// pré-requisitos, porque é onde o usuário decide o que fazer. Toda a
+// comunicação é assíncrona: nenhuma chamada de porta acontece dentro de
 // Update ou View — só dentro de tea.Cmd, em goroutine.
 package home
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -17,7 +17,7 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/inbound"
 )
 
 // zone é a região da home que detém o foco do teclado.
@@ -25,6 +25,7 @@ type zone uint8
 
 const (
 	zoneSidebar zone = iota
+	zoneSearch
 	zoneFavorites
 	zoneRecent
 	zoneSuggested
@@ -37,17 +38,18 @@ var panelZones = [...]zone{zoneFavorites, zoneRecent, zoneSuggested}
 // Model é o estado da home.
 type Model struct {
 	deps    tui.Deps
-	catalog port.Catalog
-	prefs   port.Preferences
-	launch  port.Launcher
-	clock   port.Clock
+	catalog inbound.Catalog
+	prefs   inbound.Preferences
+	launch  inbound.Launcher
+	prereqs inbound.Prerequisites
+	now     func() time.Time
 	screens tui.Screens
 
 	width, height int
 
 	// Dados do catálogo, preenchidos de forma assíncrona.
 	highlights domain.Highlights
-	categories []port.CategoryView
+	categories []inbound.CategoryView
 	catByID    map[domain.CategoryID]domain.Category
 
 	focus zone
@@ -63,6 +65,13 @@ type Model struct {
 	// queryGen descarta respostas de buscas obsoletas: digitar rápido dispara
 	// várias queries e a mais antiga pode voltar por último.
 	queryGen int
+
+	// O recorte dos filtros é carregado sob demanda ao mover a seleção na
+	// sidebar. A geração impede uma resposta lenta de repintar o filtro
+	// anterior quando o usuário percorre a lista rapidamente.
+	filterPage    domain.Page
+	filterGen     int
+	filterLoading bool
 
 	loading bool
 	err     error
@@ -94,10 +103,14 @@ var _ tui.Screen = (*Model)(nil)
 // Config agrupa as dependências da home.
 type Config struct {
 	Deps     tui.Deps
-	Catalog  port.Catalog
-	Prefs    port.Preferences
-	Launcher port.Launcher
-	Clock    port.Clock
+	Catalog  inbound.Catalog
+	Prefs    inbound.Preferences
+	Launcher inbound.Launcher
+	// Prerequisites valida os executáveis pela porta de entrada da aplicação.
+	Prerequisites inbound.Prerequisites
+	Now           func() time.Time
+	// User é o rótulo já resolvido pelo composition root para a saudação.
+	User string
 	// Screens são as tools com tela própria dentro da TUI. As demais caem
 	// no Launcher.
 	Screens tui.Screens
@@ -108,12 +121,12 @@ type Config struct {
 func New(cfg Config) *Model {
 	in := textinput.New()
 	in.Prompt = ""
-	in.Placeholder = "buscar tools…  (tag:git  kind:process  is:fav)"
+	in.Placeholder = "buscar tools…  (kind:process  is:fav)"
 	in.CharLimit = 128
 
-	clock := cfg.Clock
-	if clock == nil {
-		clock = port.SystemClock
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
 	}
 
 	return &Model{
@@ -121,12 +134,13 @@ func New(cfg Config) *Model {
 		catalog: cfg.Catalog,
 		prefs:   cfg.Prefs,
 		launch:  cfg.Launcher,
-		clock:   clock,
+		prereqs: cfg.Prerequisites,
+		now:     now,
 		screens: cfg.Screens,
 		input:   in,
 		catByID: map[domain.CategoryID]domain.Category{},
 		loading: true,
-		user:    currentUser(),
+		user:    fallbackUser(cfg.User),
 		// Abre com o foco em "sugeridas": é o único painel garantidamente
 		// preenchido na primeira execução, e focar a sidebar de saída
 		// esmaeceria o espectro inteiro menos uma categoria.
@@ -145,10 +159,13 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.loadCatalog(), tick())
 }
 
-// currentUser devolve um nome amigável para a saudação.
-func currentUser() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
+// Refresh implementa o contrato opcional do App. Não repete o tick: o relógio
+// da home nunca parou, e um segundo ticker faria o toast expirar cedo demais.
+func (m *Model) Refresh() tea.Cmd { return m.loadCatalog() }
+
+func fallbackUser(user string) string {
+	if user != "" {
+		return user
 	}
 	return "você"
 }
@@ -177,12 +194,19 @@ func greeting(now time.Time, user string) string {
 // catalogMsg carrega destaques e categorias de uma vez só.
 type catalogMsg struct {
 	highlights domain.Highlights
-	categories []port.CategoryView
+	categories []inbound.CategoryView
 	err        error
 }
 
 // resultsMsg traz o resultado de uma busca, carimbado com a geração.
 type resultsMsg struct {
+	gen  int
+	page domain.Page
+	err  error
+}
+
+// filterMsg traz as tools dos filtros selecionados na sidebar.
+type filterMsg struct {
 	gen  int
 	page domain.Page
 	err  error
@@ -199,9 +223,20 @@ type favoriteMsg struct {
 type launchedMsg struct {
 	tool domain.ToolID
 	err  error
-	// silent suprime o aviso de sucesso: abrir uma tela já é feedback
-	// suficiente, e um toast por cima dela seria ruído.
-	silent bool
+}
+
+// openedMsg confirma que a abertura de uma tool com tela própria foi
+// contabilizada.
+type openedMsg struct {
+	tool domain.ToolID
+	err  error
+}
+
+// requirementsMsg entrega a checagem feita antes de iniciar uma tool.
+type requirementsMsg struct {
+	tool    domain.Tool
+	missing []domain.Requirement
+	err     error
 }
 
 // tickMsg move o relógio da barra de status e expira toasts.
@@ -237,11 +272,33 @@ func (m *Model) runQuery(term string) tea.Cmd {
 	catalog := m.catalog
 	gen := m.queryGen
 	q := domain.Query{Term: term, Limit: searchPageSize}
+	if category, ok := m.selectedCategory(); ok {
+		q.Categories = []domain.CategoryID{category.ID}
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		page, err := catalog.Browse(ctx, q)
 		return resultsMsg{gen: gen, page: page, err: err}
+	}
+}
+
+// loadFilter busca o recorte selecionado sem bloquear a navegação.
+func (m *Model) loadFilter() tea.Cmd {
+	catalog := m.catalog
+	gen := m.filterGen
+	q := domain.Query{
+		Sort:  domain.SortAlpha,
+		Limit: searchPageSize,
+	}
+	if category, ok := m.selectedCategory(); ok {
+		q.Categories = []domain.CategoryID{category.ID}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		page, err := catalog.Browse(ctx, q)
+		return filterMsg{gen: gen, page: page, err: err}
 	}
 }
 
@@ -262,6 +319,32 @@ func (m *Model) toggleFavorite(id domain.ToolID) tea.Cmd {
 // que as executa como processo. Quem aperta enter não precisa saber a
 // diferença.
 func (m *Model) openTool(t domain.Tool) tea.Cmd {
+	if len(t.Requirements) > 0 {
+		return m.checkRequirements(t)
+	}
+	return m.openReady(t)
+}
+
+// checkRequirements consulta o PATH fora de Update. O executável pode estar
+// numa unidade de rede no Windows, então até essa leitura curta fica no Cmd.
+func (m *Model) checkRequirements(t domain.Tool) tea.Cmd {
+	prereqs := m.prereqs
+	return func() tea.Msg {
+		if prereqs == nil {
+			return requirementsMsg{
+				tool: t,
+				err:  errors.New("checagem de pré-requisitos não configurada"),
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		missing, err := prereqs.Missing(ctx, t.ID)
+		return requirementsMsg{tool: t, missing: missing, err: err}
+	}
+}
+
+// openReady inicia uma tool cujos pré-requisitos já foram satisfeitos.
+func (m *Model) openReady(t domain.Tool) tea.Cmd {
 	if screen, ok := m.screens.Open(t.ID); ok {
 		// Abrir conta como uso: é o que alimenta "recentes" e as sugestões.
 		return tea.Batch(tui.Navigate(screen), m.recordOpen(t.ID))
@@ -270,17 +353,25 @@ func (m *Model) openTool(t domain.Tool) tea.Cmd {
 }
 
 // recordOpen contabiliza a abertura de uma tool com tela própria.
+//
+// Vai direto a Preferences, e não ao Launcher: a tool nativa não tem runner
+// que a atenda — é a TUI que a "executa", desenhando-a —, e pedir um Launch
+// só para marcar o uso devolvia ErrToolNotFound e deixava "recentes" vazio
+// para sempre.
+//
+// A confirmação chega depois de a tela já estar empilhada, então o Router a
+// entrega à tool, não à home. É deliberado: a navegação não pode esperar o
+// disco. Uma falha aqui não some sem rastro — a home recarrega ao voltar, e a
+// tool simplesmente não estará em "recentes".
 func (m *Model) recordOpen(id domain.ToolID) tea.Cmd {
-	launcher := m.launch
-	if launcher == nil {
+	prefs := m.prefs
+	if prefs == nil {
 		return nil
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		// Detached: a tela já está aberta na TUI; isto só registra o uso.
-		_, err := launcher.Launch(ctx, id, nil, port.LaunchOptions{Confirmed: true, Detached: true})
-		return launchedMsg{tool: id, err: err, silent: true}
+		return openedMsg{tool: id, err: prefs.RecordRun(ctx, id)}
 	}
 }
 
@@ -297,7 +388,7 @@ func (m *Model) launchTool(t domain.Tool) tea.Cmd {
 		defer cancel()
 		// Confirmed vem falso de propósito: tools destrutivas devem devolver
 		// ErrConfirmationRequired e abrir o diálogo, não executar direto.
-		_, err := launcher.Launch(ctx, t.ID, nil, port.LaunchOptions{})
+		_, err := launcher.Launch(ctx, t.ID, nil, inbound.LaunchOptions{})
 		return launchedMsg{tool: t.ID, err: err}
 	}
 }

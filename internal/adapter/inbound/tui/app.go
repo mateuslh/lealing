@@ -22,6 +22,11 @@ type (
 	metaProvider interface{ Meta() []string }
 	// inputCapturer avisa que o teclado está preso em um campo de texto.
 	inputCapturer interface{ Capturing() bool }
+	// refresher pede para recarregar seus dados ao voltar ao topo da pilha.
+	// Telas ocultas não recebem mensagens, então uma tela sem este contrato
+	// reaparece com os dados de antes de empilhar — e a home voltaria de uma
+	// tool sem ela em "recentes".
+	refresher interface{ Refresh() tea.Cmd }
 )
 
 // Alturas fixas do chrome: cada faixa ocupa uma linha de conteúdo mais uma
@@ -68,7 +73,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmd, a.resizeCurrent())
 
 	case BackMsg:
-		a.router.Pop()
+		if a.router.Pop() {
+			return a, a.refreshCurrent()
+		}
 		return a, nil
 
 	case tea.KeyMsg:
@@ -109,11 +116,19 @@ func (a *App) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		if a.router.Pop() {
-			return nil, true
+			return a.refreshCurrent(), true
 		}
 	}
 
 	return nil, false
+}
+
+// refreshCurrent pede à tela que reapareceu que recarregue seus dados.
+func (a *App) refreshCurrent() tea.Cmd {
+	if r, ok := a.router.Current().(refresher); ok {
+		return r.Refresh()
+	}
+	return nil
 }
 
 // capturing consulta a tela atual sobre a captura de teclado.
@@ -219,7 +234,6 @@ func (a *App) viewHelp(f Frame) string {
 		}},
 		{"busca", [][2]string{
 			{"/ ou ctrl+k", "abrir a busca"},
-			{"tag:git", "filtrar por tag"},
 			{"kind:process", "filtrar por modo de execução"},
 			{"cat:cloud", "filtrar por categoria"},
 			{"is:fav", "somente favoritas"},

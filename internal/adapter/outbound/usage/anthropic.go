@@ -47,10 +47,11 @@ type quotaSnapshot struct {
 	err     error
 }
 
-// NewClaudeQuota monta o cliente com os padrões de produção.
-func NewClaudeQuota() *ClaudeQuota {
+// NewClaudeQuota monta o cliente com a fonte de credenciais escolhida pelo
+// composition root.
+func NewClaudeQuota(source CredentialSource) *ClaudeQuota {
 	return &ClaudeQuota{
-		Source:   NewLocalCredentials(),
+		Source:   source,
 		Client:   &http.Client{Timeout: 8 * time.Second},
 		Endpoint: UsageEndpoint,
 		Now:      time.Now,
@@ -73,6 +74,9 @@ func (q *ClaudeQuota) fetch(ctx context.Context) ([]tokens.RateWindow, *tokens.C
 }
 
 func (q *ClaudeQuota) load(ctx context.Context, now time.Time) ([]tokens.RateWindow, *tokens.Credits, error) {
+	if q.Source == nil {
+		return nil, nil, ErrNoCredentials
+	}
 	cred, err := q.Source.Credential(ctx)
 	if err != nil {
 		return nil, nil, err

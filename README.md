@@ -35,7 +35,7 @@ Variáveis: `LEALING_BIN_DIR` escolhe o destino, `LEALING_VERSION` a tag e
 `LEALING_NO_PATH=1` deixa o seu perfil em paz.
 
 ```sh
-LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.1.0 sh install.sh
+LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.0 sh install.sh
 ```
 
 No Windows, baixe `lealing_windows_amd64.zip` (ou `_arm64`) da
@@ -110,6 +110,9 @@ git tag -a v0.1.0 -m "primeira release" && git push origin v0.1.0
 | **Uso de Tokens** | Cotas das CLIs de IA — quanto resta, em que ritmo e quando renova — mais consumo e custo por janela, modelo, projeto e dia. |
 | **Contas do Claude Code** | Guarda as sessões de várias contas e alterna entre elas sem refazer login. |
 | **Atualizar o lealing** | Compara a versão instalada com o último release e atualiza pelo caminho por onde o lealing foi instalado. |
+| **Clone Repo Bradesco** | Descobre a família de um projeto no GitHub, clona os repositórios escolhidos e os registra no IntelliJ. |
+| **Radar Git do dev** | Varre os clones em `~/dev`, mostra branches e alterações pendentes e oferece ações Git explícitas. |
+| **Bancada de engenharia** | Sonda HTTP, DNS/TLS, JSON, JWT, CIDR, codecs, checksums e UUIDs em telas nativas. |
 
 As cotas das duas CLIs são consultadas **ao vivo na conta**, nas mesmas
 rotas que elas próprias usam para desenhar seu `/usage` — Claude Code em
@@ -166,6 +169,9 @@ lealing -platforms      # a matriz, gerada do catálogo
 | Uso de Tokens | ✓ | ✓ | lê os logs das CLIs, iguais nos dois |
 | Contas do Claude Code | ✓ | ✓ | chaveiro (`security`) · `~/.claude/.credentials.json` |
 | Atualizar o lealing | ✓ | ✓ | releases do GitHub · `git` + `go build` |
+| Clone Repo Bradesco | ✓ | ✓ | GitHub CLI + Git · recentes do IntelliJ |
+| Radar Git do dev | ✓ | ✓ | leitura e ações via Git |
+| Bancada de engenharia | ✓ | ✓ | biblioteca padrão e rede |
 
 **Parcial** quer dizer painel menor, não tool quebrada: o `powercfg` grava os
 três tempos de inatividade (dormir, tela, disco) e não tem equivalente para
@@ -226,21 +232,21 @@ mudar valores é o que a tela existe para fazer.
 ## Arquitetura
 
 Hexagonal (ports & adapters). A regra que sustenta tudo: **a dependência
-sempre aponta para dentro**. O núcleo não importa nada de fora; adapters
-implementam ou consomem as interfaces declaradas por ele.
+sempre aponta para dentro**. O núcleo não importa nada de fora; a TUI chama
+portas de entrada, os casos de uso consomem portas de saída e só o bootstrap
+conhece implementações concretas.
 
 ```
                     ┌───────────────────────────────┐
    driving          │            CORE               │          driven
    adapter          │                               │          adapters
                     │  ┌─────────────────────────┐  │
-  ┌──────────┐      │  │   domain · port · svc   │  │      ┌──────────────┐
-  │   TUI    │─────▶│  │      (o catálogo)       │  │◀─────│   registry   │
-  │ BubbleTea│ port │  ├─────────────────────────┤  │ port │   search     │
-  └──────────┘      │  │ sysinfo · power · tokens│  │      │ persistence  │
-       │            │  │   (uma por tool)        │  │      │ macos·usage  │
-       │            │  └─────────────────────────┘  │      └──────────────┘
-    screens         └───────────────────────────────┘
+  ┌──────────┐      │  │ portas de entrada       │  │      ┌──────────────┐
+  │   TUI    │─────▶│  │ casos de uso            │  │◀─────│   registry   │
+  │ BubbleTea│      │  │ domínio + core das tools│  │      │   search     │
+  └──────────┘      │  │ portas de saída         │◀─┼──────│ persistência │
+       │            │  └─────────────────────────┘  │      │ macos·windows│
+    screens         └───────────────────────────────┘      └──────────────┘
 ```
 
 ```
@@ -248,7 +254,8 @@ cmd/lealing/                    binário e flags
 internal/
   core/
     domain/                     o catálogo: Tool, Query, Usage, Session
-    port/                       interfaces de entrada (driving) e saída (driven)
+    port/inbound/               casos de uso consumidos por driving adapters
+    port/outbound/              recursos implementados por driven adapters
     service/                    casos de uso: CatalogService, LauncherService
     sysinfo/ power/ tokens/     um núcleo por tool: tipos, regras e portas
     selfupdate/                 versões, modo de instalação e o veredito da atualização
@@ -260,7 +267,7 @@ internal/
       screen/sysinfo|power|tokens/   uma tela por tool
     outbound/
       registry/                 agrega ToolProviders em um repositório
-      search/                   busca fuzzy reponderada por uso
+      search/                   relevância textual fuzzy
       persistence/              favoritos e estatísticas em JSON atômico
       macos/                    sysctl, pmset, diálogo de administrador
       windows/                  CIM (WMI) e powercfg
@@ -268,21 +275,26 @@ internal/
       selfupdate/               releases do GitHub, checksum e troca do binário
   catalog/                      as tools declaradas
   platform/                     log e caminhos XDG
-  bootstrap/                    composition root — o único lugar que liga tudo
+  architecture/                testes das fronteiras de dependência
+  bootstrap/                    composition root e validação das ligações
 ```
 
 ### Por que assim
 
 - **Um núcleo por tool.** `core/power` conhece perfis de energia e nada mais;
   não sabe que `pmset` existe. Trocar o backend é trocar o adapter.
-- **Providers independentes.** Cada fonte publica um `port.ToolProvider`; o
-  `registry` consolida, valida e indexa uma vez só. Tool sem nome, ID
-  duplicado ou categoria não declarada falham no registro, não na tela.
+- **Providers independentes.** Cada fonte publica um
+  `outbound.ToolProvider`; o `registry` consolida, valida e indexa uma vez
+  só. Tool sem nome, ID duplicado ou categoria não declarada falham no
+  registro, não na tela.
 - **Paginação obrigatória.** `domain.Query` sempre carrega `Offset`/`Limit`.
   A TUI nunca materializa o acervo inteiro.
-- **Telas sob demanda.** `tui.Screens` mapeia tool → factory. Uma tool sem
-  tela cai no `Launcher` e roda como processo; quem aperta `↵` não vê
-  diferença.
+- **Telas sob demanda.** `tui.Screens` mapeia tool → factory. Tools não
+  nativas caem no `Launcher`; `validateWiring` recusa, ainda no arranque,
+  builtin sem tela, factory órfã ou processo sem runner.
+- **Grafo acíclico.** O buscador calcula relevância textual; o serviço do
+  catálogo combina frequência, recência e favoritos. Nenhum adapter recebe
+  uma closure de volta para um caso de uso.
 - **Nenhuma porta é chamada em `Update` ou `View`.** Todo I/O vive em
   `tea.Cmd`, em goroutine. É o que mantém a interface responsiva enquanto a
   varredura de tokens percorre centenas de megabytes de log.
@@ -299,8 +311,8 @@ make cover    # relatório de cobertura
 
 A suíte cobre as regras do domínio, o pipeline do catálogo (filtro → busca →
 ordenação → paginação), a agregação de tokens, a comparação de versões da
-atualização, os parsers do `pmset` e do CIM/`powercfg` e — o mais valioso — a
-**geometria da TUI**: cada tela é
+atualização, os parsers do `pmset` e do CIM/`powercfg`, as fronteiras de
+dependência da arquitetura e — o mais valioso — a **geometria da TUI**: cada tela é
 renderizada em nove tamanhos, de 200×60 a 26×8, verificando que nenhuma linha
 excede o frame.
 

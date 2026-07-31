@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	core "github.com/mateuslh/lealing/internal/core/selfupdate"
@@ -123,7 +122,7 @@ func TestLocateMarcaDiretorioSemEscrita(t *testing.T) {
 	// não faz nada em diretório: a permissão de verdade está na ACL, que este
 	// teste não tem como montar. O código sob teste é o mesmo nos dois — ele
 	// tenta criar um arquivo e observa o resultado.
-	if runtime.GOOS == "windows" {
+	if os.PathSeparator == '\\' {
 		t.Skip("os.Chmod não tira a escrita de um diretório no Windows")
 	}
 
@@ -147,16 +146,17 @@ func TestLocateMarcaDiretorioSemEscrita(t *testing.T) {
 // TestApplyTrocaOBinario exercita o caminho inteiro: baixa o tarball do
 // servidor de teste, confere o checksum, extrai e substitui o executável.
 func TestApplyTrocaOBinario(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if os.PathSeparator == '\\' {
 		t.Skip("o artefato do Windows é .zip; este teste monta um tar.gz")
 	}
 
 	const novo = "#!/bin/sh\necho versão nova\n"
 	archive := tarGz(t, "lealing", novo)
+	asset := AssetName("lealing", testTarget.OS, testTarget.Arch)
 	srv := releaseServer(t, map[string][]byte{
-		AssetName("lealing", runtime.GOOS, runtime.GOARCH): archive,
+		asset: archive,
 		"checksums.txt": []byte(fmt.Sprintf("%s  %s\n",
-			sha256hex(archive), AssetName("lealing", runtime.GOOS, runtime.GOARCH))),
+			sha256hex(archive), asset)),
 	})
 
 	dir := t.TempDir()
@@ -199,11 +199,11 @@ func TestApplyTrocaOBinario(t *testing.T) {
 }
 
 func TestApplyRecusaChecksumErrado(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if os.PathSeparator == '\\' {
 		t.Skip("o artefato do Windows é .zip; este teste monta um tar.gz")
 	}
 
-	asset := AssetName("lealing", runtime.GOOS, runtime.GOARCH)
+	asset := AssetName("lealing", testTarget.OS, testTarget.Arch)
 	srv := releaseServer(t, map[string][]byte{
 		asset:           tarGz(t, "lealing", "conteúdo adulterado"),
 		"checksums.txt": []byte("0000000000000000000000000000000000000000000000000000000000000000  " + asset + "\n"),
@@ -244,10 +244,17 @@ func TestApplyRecusaDiretorioSemEscrita(t *testing.T) {
 // --- Auxiliares --------------------------------------------------------
 
 func testApplier(host string) *Applier {
-	a := NewApplier(Repo{Owner: "mateuslh", Name: "lealing"}, "lealing", "./cmd/lealing")
+	a := NewApplier(
+		Repo{Owner: "mateuslh", Name: "lealing"},
+		"lealing",
+		"./cmd/lealing",
+		testTarget,
+	)
 	a.host = host
 	return a
 }
+
+var testTarget = Target{OS: "linux", Arch: "amd64"}
 
 // releaseServer serve os artefatos no mesmo caminho que o GitHub usa.
 func releaseServer(t *testing.T, files map[string][]byte) *httptest.Server {

@@ -9,19 +9,20 @@ import (
 	"sync"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/inbound"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
-// CatalogService implementa port.Catalog e port.Preferences sobre um
+// CatalogService implementa inbound.Catalog e inbound.Preferences sobre um
 // repositório de tools, um buscador e um store de uso.
 //
 // O estado de uso é mantido em memória e escrito de forma write-through: a
 // home é redesenhada a cada tecla e não pode pagar I/O por frame.
 type CatalogService struct {
-	repo     port.ToolRepository
-	searcher port.Searcher
-	usage    port.UsageStore
-	clock    port.Clock
+	repo     outbound.ToolRepository
+	searcher outbound.Searcher
+	usage    outbound.UsageStore
+	clock    outbound.Clock
 
 	mu     sync.RWMutex
 	cache  map[domain.ToolID]domain.Usage
@@ -30,14 +31,19 @@ type CatalogService struct {
 
 // Garante em tempo de compilação que os contratos são satisfeitos.
 var (
-	_ port.Catalog     = (*CatalogService)(nil)
-	_ port.Preferences = (*CatalogService)(nil)
+	_ inbound.Catalog     = (*CatalogService)(nil)
+	_ inbound.Preferences = (*CatalogService)(nil)
 )
 
 // NewCatalog monta o serviço. Um clock nil cai para o relógio de sistema.
-func NewCatalog(repo port.ToolRepository, searcher port.Searcher, usage port.UsageStore, clock port.Clock) *CatalogService {
+func NewCatalog(
+	repo outbound.ToolRepository,
+	searcher outbound.Searcher,
+	usage outbound.UsageStore,
+	clock outbound.Clock,
+) *CatalogService {
 	if clock == nil {
-		clock = port.SystemClock
+		clock = outbound.SystemClock
 	}
 	return &CatalogService{
 		repo:     repo,
@@ -48,7 +54,7 @@ func NewCatalog(repo port.ToolRepository, searcher port.Searcher, usage port.Usa
 	}
 }
 
-// Browse implementa port.Catalog.
+// Browse implementa inbound.Catalog.
 //
 // O pipeline é: filtros estruturados → ranqueamento textual → ordenação →
 // recorte de página. O texto livre roda depois dos filtros porque estes são
@@ -75,7 +81,12 @@ func (s *CatalogService) Browse(ctx context.Context, q domain.Query) (domain.Pag
 	if q.Term != "" && s.searcher != nil {
 		matches = s.searcher.Rank(q.Term, filtered)
 		for i := range matches {
-			matches[i].Usage = s.usageOf(matches[i].Tool.ID)
+			usage := s.usageOf(matches[i].Tool.ID)
+			matches[i].Usage = usage
+			// A estratégia de busca entrega relevância textual. Frequência,
+			// recência e favoritos são política da aplicação e entram aqui,
+			// sem uma closure de volta do adapter para este serviço.
+			matches[i].Score += 0.5 * usage.Score(s.clock.Now())
 		}
 	} else {
 		matches = make([]domain.Match, len(filtered))
@@ -104,7 +115,12 @@ func (s *CatalogService) sortMatches(matches []domain.Match, by domain.SortBy) {
 	now := s.clock.Now()
 	switch by {
 	case domain.SortRelevance:
-		// Já vem ranqueado pelo Searcher.
+		sort.SliceStable(matches, func(i, j int) bool {
+			if matches[i].Score != matches[j].Score {
+				return matches[i].Score > matches[j].Score
+			}
+			return matches[i].Tool.Title() < matches[j].Tool.Title()
+		})
 	case domain.SortSmart:
 		sort.SliceStable(matches, func(i, j int) bool {
 			si, sj := matches[i].Usage.Score(now), matches[j].Usage.Score(now)
@@ -124,13 +140,13 @@ func (s *CatalogService) sortMatches(matches []domain.Match, by domain.SortBy) {
 	}
 }
 
-// Lookup implementa port.Catalog.
+// Lookup implementa inbound.Catalog.
 func (s *CatalogService) Lookup(ctx context.Context, id domain.ToolID) (domain.Tool, error) {
 	return s.repo.ByID(ctx, id)
 }
 
-// Categories implementa port.Catalog, resolvendo a contagem de tools.
-func (s *CatalogService) Categories(ctx context.Context) ([]port.CategoryView, error) {
+// Categories implementa inbound.Catalog, resolvendo a contagem de tools.
+func (s *CatalogService) Categories(ctx context.Context) ([]inbound.CategoryView, error) {
 	cats, err := s.repo.Categories(ctx)
 	if err != nil {
 		return nil, err
@@ -145,14 +161,14 @@ func (s *CatalogService) Categories(ctx context.Context) ([]port.CategoryView, e
 		counts[t.Category]++
 	}
 
-	views := make([]port.CategoryView, len(cats))
+	views := make([]inbound.CategoryView, len(cats))
 	for i, c := range cats {
-		views[i] = port.CategoryView{Category: c, Count: counts[c.ID]}
+		views[i] = inbound.CategoryView{Category: c, Count: counts[c.ID]}
 	}
 	return views, nil
 }
 
-// Highlights implementa port.Catalog, montando os recortes da home.
+// Highlights implementa inbound.Catalog, montando os recortes da home.
 //
 // Sugestões excluem o que já aparece em favoritas ou recentes: repetir a
 // mesma tool em três painéis desperdiça a tela.
@@ -235,7 +251,7 @@ func (s *CatalogService) Highlights(ctx context.Context, limit int) (domain.High
 	return h, nil
 }
 
-// ToggleFavorite implementa port.Preferences.
+// ToggleFavorite implementa inbound.Preferences.
 func (s *CatalogService) ToggleFavorite(ctx context.Context, id domain.ToolID) (bool, error) {
 	if _, err := s.repo.ByID(ctx, id); err != nil {
 		return false, err
@@ -257,7 +273,7 @@ func (s *CatalogService) ToggleFavorite(ctx context.Context, id domain.ToolID) (
 	return u.Favorite, nil
 }
 
-// Usage implementa port.Preferences.
+// Usage implementa inbound.Preferences.
 func (s *CatalogService) Usage(ctx context.Context, id domain.ToolID) (domain.Usage, error) {
 	if err := s.ensureUsage(ctx); err != nil {
 		return domain.Usage{}, err
@@ -265,8 +281,11 @@ func (s *CatalogService) Usage(ctx context.Context, id domain.ToolID) (domain.Us
 	return s.usageOf(id), nil
 }
 
-// RecordRun contabiliza uma execução. Não faz parte de port.Preferences
-// porque o chamador é o LauncherService, não um driving adapter.
+// RecordRun implementa inbound.Preferences, contabilizando uma execução.
+//
+// Tem dois chamadores legítimos: o LauncherService, quando um runner aceita a
+// tool, e o driving adapter, quando a tool abre uma tela dentro da própria TUI
+// e portanto nunca chega a um runner.
 func (s *CatalogService) RecordRun(ctx context.Context, id domain.ToolID) error {
 	if err := s.ensureUsage(ctx); err != nil {
 		return err

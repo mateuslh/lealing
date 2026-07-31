@@ -9,6 +9,7 @@ package bootstrap
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -16,26 +17,30 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	accountsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/ccaccount"
+	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
+	gitinsightscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
 	powerscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
+	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	tokensscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/tokens"
 	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/claudecli"
+	devkitadapter "github.com/mateuslh/lealing/internal/adapter/outbound/devkit"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/persistence"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/runner"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/search"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/usage"
 	"github.com/mateuslh/lealing/internal/catalog"
 	"github.com/mateuslh/lealing/internal/core/ccaccount"
+	"github.com/mateuslh/lealing/internal/core/devkit"
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
 	coretokens "github.com/mateuslh/lealing/internal/core/tokens"
 	"github.com/mateuslh/lealing/internal/platform/logging"
-	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
 // Options são as escolhas que o binário oferece na linha de comando.
@@ -58,16 +63,26 @@ type App struct {
 // Wire monta o grafo de dependências completo.
 //
 // A ordem segue de fora para dentro: primeiro a infraestrutura (log, disco),
-// depois os adapters de saída, depois os serviços do core e, por último, o
-// adapter de entrada — que é o único que enxerga tudo.
+// depois os adapters de saída, os serviços do core e, por último, as
+// factories do adapter de entrada. Só este composition root enxerga
+// implementações dos dois lados.
 func Wire(opts Options) (*App, error) {
 	app := &App{}
+	complete := false
+	defer func() {
+		if !complete {
+			app.close()
+		}
+	}()
+
+	platform := currentPlatform()
+	directories := directoriesFor(platform)
 
 	// --- Infraestrutura ---
-	log := port.Logger(logging.NewDiscard())
+	log := outbound.Logger(logging.NewDiscard())
 	if opts.Debug {
 		level := slog.LevelDebug
-		fileLog, err := logging.NewFile(filepath.Join(xdg.StateDir(), "lealing.log"), level)
+		fileLog, err := logging.NewFile(filepath.Join(directories.State, "lealing.log"), level)
 		if err != nil {
 			return nil, err
 		}
@@ -79,46 +94,33 @@ func Wire(opts Options) (*App, error) {
 	// O catálogo é o mesmo em toda plataforma; o filtro é que decide o que
 	// esta máquina enxerga. Manter a declaração única evita que a lista de
 	// tools se bifurque por sistema operacional.
-	platform := domain.CurrentPlatform()
 	repo := registry.New(catalog.Providers(),
 		registry.WithLogger(log),
 		registry.WithStrict(opts.Debug),
 		registry.WithPlatform(platform),
 	)
 
-	var usageStore port.UsageStore
+	var usageStore outbound.UsageStore
 	if opts.Ephemeral {
 		usageStore = persistence.NewMemoryUsage()
 	} else {
 		// O debounce de meio segundo agrupa rajadas de favoritos em uma
 		// única escrita, sem que o usuário perceba atraso.
-		file := persistence.NewUsageFile(filepath.Join(xdg.DataDir(), "usage.json"), 500*time.Millisecond)
+		file := persistence.NewUsageFile(filepath.Join(directories.Data, "usage.json"), 500*time.Millisecond)
 		app.closers = append(app.closers, file.Close)
 		usageStore = file
 	}
 
-	clock := port.SystemClock
+	clock := outbound.SystemClock
 
 	// --- Core ---
-	// O buscador precisa consultar o uso para reponderar, e o catálogo
-	// precisa do buscador: a dependência circular é quebrada passando uma
-	// closure que só resolve depois de ambos existirem.
-	var catalogSvc *service.CatalogService
-	searcher := search.NewFuzzy(clock, func(id domain.ToolID) domain.Usage {
-		if catalogSvc == nil {
-			return domain.Usage{}
-		}
-		// Neste ponto o cache de uso já foi carregado pelo Browse que
-		// chamou o Rank, então esta leitura não toca em I/O.
-		u, _ := catalogSvc.Usage(context.Background(), id)
-		return u
-	})
-	catalogSvc = service.NewCatalog(repo, searcher, usageStore, clock)
+	// O Searcher cuida apenas da relevância textual; o serviço combina uso,
+	// favoritos e recência. Assim o grafo permanece acíclico.
+	catalogSvc := service.NewCatalog(repo, search.NewFuzzy(), usageStore, clock)
+	prerequisites := service.NewPrerequisites(repo, requirements.NewPathChecker())
 
-	launcher := service.NewLauncher(repo, catalogSvc, clock, log,
-		runner.NewBuiltin(),
-		runner.NewPlaceholder(log),
-	)
+	var toolRunners []outbound.ToolRunner
+	launcher := service.NewLauncher(repo, catalogSvc, clock, log, toolRunners...)
 
 	// --- Telas das tools nativas ---
 	// Cada entrada liga uma tool do catálogo à tela que a implementa. As
@@ -127,16 +129,25 @@ func Wire(opts Options) (*App, error) {
 	th := theme.Default()
 	deps := tui.Deps{Theme: th}
 
-	native := adaptersFor(platform, clock.Now)
-	usageService := coretokens.NewService(clock.Now, usage.NewClaudeCode(), usage.NewCodex())
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	native := adaptersFor(platform, clock.Now, userHome)
+	usageService := coretokens.NewService(clock.Now, tokenProvidersFor(platform, userHome)...)
+	gitScanner := gitinsight.New(filepath.Join(userHome, "dev"), clock.Now)
+	engineeringRunner := devkitadapter.New()
 
 	// O cofre e o índice das contas do Claude Code: o backup do ~/.claude.json
 	// e o índice dos perfis vivem no diretório de dados do lealing; as
 	// credenciais, no cofre que cada sistema oferece.
 	accounts := ccaccount.NewManager(
-		claudecli.NewVault(),
-		claudecli.NewConfigFile(filepath.Join(xdg.DataDir(), "claude-json.backup")),
-		claudecli.NewStore(filepath.Join(xdg.DataDir(), "claude-accounts.json")),
+		claudecli.NewVault(claudecli.CredentialsPath(userHome)),
+		claudecli.NewConfigFile(
+			claudecli.ConfigPath(userHome),
+			filepath.Join(directories.Data, "claude-json.backup"),
+		),
+		claudecli.NewStore(filepath.Join(directories.Data, "claude-accounts.json")),
 		clock.Now,
 	)
 
@@ -147,23 +158,44 @@ func Wire(opts Options) (*App, error) {
 	screens := tui.Screens{
 		"token-usage":     func() tui.Screen { return tokensscreen.New(deps, usageService, clock.Now) },
 		"claude-accounts": func() tui.Screen { return accountsscreen.New(deps, accounts, clock.Now) },
-		"self-update":     func() tui.Screen { return updatescreen.New(deps, Updater(opts.Version)) },
+		"self-update": func() tui.Screen {
+			return updatescreen.New(deps, Updater(opts.Version), userHome, clock.Now)
+		},
+		"git-dev-radar": func() tui.Screen { return gitinsightscreen.New(deps, gitScanner) },
+	}
+	for _, definition := range devkit.Definitions() {
+		definition := definition
+		screens[domain.ToolID(definition.ToolID)] = func() tui.Screen {
+			return devkitscreen.New(deps, engineeringRunner, definition)
+		}
 	}
 	if native.inspector != nil {
-		screens["system-info"] = func() tui.Screen { return sysinfoscreen.New(deps, native.inspector) }
+		screens["system-info"] = func() tui.Screen {
+			return sysinfoscreen.New(deps, native.inspector, clock.Now)
+		}
 	}
 	if native.power != nil {
 		screens["power-control"] = func() tui.Screen { return powerscreen.New(deps, native.power) }
 	}
+	if native.repoClone != nil {
+		screens["clone-repo-bradesco"] = func() tui.Screen {
+			return repoclonescreen.New(deps, native.repoClone)
+		}
+	}
+	if err := validateWiring(context.Background(), repo, screens, toolRunners); err != nil {
+		return nil, err
+	}
 
 	// --- Adapter de entrada ---
 	root := home.New(home.Config{
-		Deps:     deps,
-		Catalog:  catalogSvc,
-		Prefs:    catalogSvc,
-		Launcher: launcher,
-		Clock:    clock,
-		Screens:  screens,
+		Deps:          deps,
+		Catalog:       catalogSvc,
+		Prefs:         catalogSvc,
+		Launcher:      launcher,
+		Prerequisites: prerequisites,
+		Now:           clock.Now,
+		User:          userNameFor(platform),
+		Screens:       screens,
 	})
 
 	app.ui = tui.NewApp(th, root)
@@ -171,6 +203,7 @@ func Wire(opts Options) (*App, error) {
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
+	complete = true
 	return app, nil
 }
 
@@ -198,4 +231,5 @@ func (a *App) close() {
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		_ = a.closers[i]()
 	}
+	a.closers = nil
 }

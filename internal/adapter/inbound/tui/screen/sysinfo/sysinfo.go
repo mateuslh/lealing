@@ -20,6 +20,7 @@ const ScreenID tui.ScreenID = "tool/system-info"
 type Model struct {
 	deps      tui.Deps
 	inspector sysinfo.Inspector
+	now       func() time.Time
 
 	width, height int
 
@@ -31,9 +32,12 @@ type Model struct {
 
 var _ tui.Screen = (*Model)(nil)
 
-// New monta a tela.
-func New(deps tui.Deps, inspector sysinfo.Inspector) *Model {
-	return &Model{deps: deps, inspector: inspector, loading: true}
+// New monta a tela com o relógio explícito.
+func New(deps tui.Deps, inspector sysinfo.Inspector, now func() time.Time) *Model {
+	if now == nil {
+		now = time.Now
+	}
+	return &Model{deps: deps, inspector: inspector, now: now, loading: true}
 }
 
 // ID implementa tui.Screen.
@@ -74,7 +78,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 		m.err = msg.err
 		if msg.err == nil {
 			m.snapshot = msg.snapshot
-			m.loadedAt = time.Now()
+			m.loadedAt = m.now()
 		}
 		return m, nil
 
@@ -113,13 +117,48 @@ func (m *Model) View(f tui.Frame) string {
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	paddingY := 1
+	if lipgloss.Height(body)+2 > f.Height {
+		// Em janelas baixas, respiro é menos importante que fechar todas as
+		// molduras. Sem esta compactação o painel de hardware terminava sem
+		// borda em 60×20, embora nenhuma linha excedesse o frame.
+		blocks = m.compactColumns(inner, sections)
+		body = lipgloss.JoinVertical(lipgloss.Left, blocks...)
+		paddingY = 0
+	}
 	// Os limites são aplicados depois do padding: recortar só o miolo
 	// deixaria as duas linhas de respiro estourando o frame.
 	return lipgloss.NewStyle().
-		Padding(1, 2).
+		Padding(paddingY, 2).
 		MaxWidth(f.Width).
 		MaxHeight(f.Height).
 		Render(body)
+}
+
+// compactColumns reúne os campos numa moldura só. Três pares de borda
+// consumiriam seis linhas — quase metade do corpo de uma janela 60×20.
+func (m *Model) compactColumns(width int, sections []sysinfo.Section) []string {
+	var rows []component.Row
+	for _, section := range sections {
+		for _, field := range section.Fields {
+			row := component.Row{Label: field.Label, Value: field.Value}
+			if section.Title == "Bateria" && field.Label == "Carga" {
+				if pct, ok := percentOf(field.Value); ok && pct <= 20 {
+					row.Tone = m.deps.Theme.Danger
+				}
+			}
+			rows = append(rows, row)
+		}
+	}
+	content := component.FieldList{Rows: rows, Width: width - 4}.Render(m.deps.Theme)
+	panel := component.Panel{
+		Title:  "Resumo",
+		Glyph:  "◎",
+		Accent: m.deps.Theme.Primary,
+		Width:  width,
+		Height: len(rows) + 2,
+	}.Render(m.deps.Theme, content)
+	return []string{panel}
 }
 
 // oneColumn empilha as seções.

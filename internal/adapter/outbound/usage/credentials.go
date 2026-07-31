@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -45,23 +44,28 @@ type CredentialSource interface {
 // LocalCredentials lê a sessão do chaveiro do macOS e, se não achar, do
 // arquivo que as outras plataformas usam.
 type LocalCredentials struct {
-	// File é o caminho do fallback; vazio usa ~/.claude/.credentials.json.
+	// File é o caminho do fallback em arquivo.
 	File string
 	// Service permite apontar para outro item do chaveiro em teste.
 	Service string
+	// Keychain habilita a consulta ao `security` antes do arquivo. O
+	// composition root só liga esta opção no macOS.
+	Keychain bool
 }
 
 var _ CredentialSource = (*LocalCredentials)(nil)
 
-// NewLocalCredentials monta a fonte com os caminhos padrão.
-func NewLocalCredentials() *LocalCredentials {
-	return &LocalCredentials{File: homePath(".claude/.credentials.json"), Service: keychainService}
+// NewLocalCredentials monta a fonte com dependências explícitas.
+func NewLocalCredentials(file string, keychain bool) *LocalCredentials {
+	return &LocalCredentials{File: file, Service: keychainService, Keychain: keychain}
 }
 
 // Credential implementa CredentialSource.
 func (l *LocalCredentials) Credential(ctx context.Context) (Credential, error) {
-	if raw, err := l.fromKeychain(ctx); err == nil {
-		return ParseCredential(raw)
+	if l.Keychain {
+		if raw, err := l.fromKeychain(ctx); err == nil {
+			return ParseCredential(raw)
+		}
 	}
 	raw, err := os.ReadFile(l.File)
 	if err != nil {
@@ -77,9 +81,6 @@ func (l *LocalCredentials) Credential(ctx context.Context) (Credential, error) {
 // credencial no arquivo, e tentar o comando ali só gastaria o custo de um
 // processo para falhar.
 func (l *LocalCredentials) fromKeychain(ctx context.Context) ([]byte, error) {
-	if runtime.GOOS != "darwin" {
-		return nil, ErrNoCredentials
-	}
 	service := l.Service
 	if service == "" {
 		service = keychainService
@@ -114,8 +115,8 @@ type CodexFile struct{ Path string }
 
 var _ CodexCredentialSource = (*CodexFile)(nil)
 
-// NewCodexFile monta a fonte com o caminho padrão.
-func NewCodexFile() *CodexFile { return &CodexFile{Path: homePath(".codex/auth.json")} }
+// NewCodexFile monta a fonte no caminho recebido do composition root.
+func NewCodexFile(path string) *CodexFile { return &CodexFile{Path: path} }
 
 // CodexCredential implementa CodexCredentialSource.
 func (c *CodexFile) CodexCredential(context.Context) (CodexCredential, error) {

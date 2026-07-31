@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mateuslh/lealing/internal/core/ccaccount"
+	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
 // Store guarda os perfis em duas metades: os metadados legíveis em um índice
@@ -215,7 +216,7 @@ func (s *Store) write(idx indexFile) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.IndexPath), 0o700); err != nil {
+	if err := xdg.MkdirAll(filepath.Dir(s.IndexPath), 0o700); err != nil {
 		return err
 	}
 	return writeAtomic(s.IndexPath, out, 0o600)

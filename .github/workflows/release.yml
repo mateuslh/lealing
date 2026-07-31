@@ -1,6 +1,6 @@
 # Publica os binários quando uma tag `v*` é empurrada.
 #
-#   git tag -a v0.1.0 -m "primeira release" && git push origin v0.1.0
+#   git tag -a v0.2.0 -m "release v0.2.0" && git push origin v0.2.0
 #
 # O GoReleaser compila macOS, Windows e Linux (amd64 e arm64), gera o
 # checksums.txt e cria a release — que é de onde o install.sh e a tool

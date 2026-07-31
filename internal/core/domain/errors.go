@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Erros sentinela do domínio. Adapters traduzem estes valores para o
@@ -75,6 +76,18 @@ func (t Tool) Validate() error {
 		return &ValidationError{ID: t.ID, Field: "Risk", Reason: "é desconhecido"}
 	case !t.Platforms.Valid():
 		return &ValidationError{ID: t.ID, Field: "Platforms", Reason: "tem bit desconhecido"}
+	}
+	seenRequirements := make(map[string]bool, len(t.Requirements))
+	for _, requirement := range t.Requirements {
+		switch {
+		case requirement.Executable == "":
+			return &ValidationError{ID: t.ID, Field: "Requirements", Reason: "tem executável vazio"}
+		case strings.ContainsAny(requirement.Executable, `/\`+" \t\r\n"):
+			return &ValidationError{ID: t.ID, Field: "Requirements", Reason: "deve declarar nome sem caminho ou argumentos"}
+		case seenRequirements[requirement.Executable]:
+			return &ValidationError{ID: t.ID, Field: "Requirements", Reason: "tem executável duplicado"}
+		}
+		seenRequirements[requirement.Executable] = true
 	}
 	return nil
 }

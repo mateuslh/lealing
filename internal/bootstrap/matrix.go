@@ -38,7 +38,7 @@ func SupportMatrix(ctx context.Context) (string, error) {
 		{domain.Linux, "Linux"},
 	}
 
-	current := domain.CurrentPlatform()
+	current := currentPlatform()
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 

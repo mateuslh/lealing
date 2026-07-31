@@ -7,30 +7,21 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
 // Fuzzy ranqueia tools por casamento aproximado sobre um corpus que inclui
 // nome, ID, resumo, keywords e tags.
 //
-// O score bruto do fuzzy é reponderado por sinais do domínio (casou no nome?
-// é favorita? é usada com frequência?), porque relevância textual sozinha
-// coloca uma tool obscura na frente de outra que o usuário roda todo dia.
-type Fuzzy struct {
-	clock port.Clock
-	usage func(domain.ToolID) domain.Usage
-}
+// O score produzido aqui é exclusivamente textual. Favoritos, frequência e
+// recência pertencem à política do caso de uso e são combinados pelo serviço
+// do catálogo.
+type Fuzzy struct{}
 
-var _ port.Searcher = (*Fuzzy)(nil)
+var _ outbound.Searcher = (*Fuzzy)(nil)
 
-// NewFuzzy monta o buscador. O parâmetro usage é opcional: quando nil, o
-// ranqueamento é puramente textual.
-func NewFuzzy(clock port.Clock, usage func(domain.ToolID) domain.Usage) *Fuzzy {
-	if clock == nil {
-		clock = port.SystemClock
-	}
-	return &Fuzzy{clock: clock, usage: usage}
-}
+// NewFuzzy monta o buscador.
+func NewFuzzy() *Fuzzy { return &Fuzzy{} }
 
 // corpus adapta []domain.Tool à interface fuzzy.Source, evitando alocar um
 // []string paralelo a cada tecla digitada.
@@ -42,7 +33,7 @@ type corpus struct {
 func (c corpus) String(i int) string { return c.text[i] }
 func (c corpus) Len() int            { return len(c.tools) }
 
-// Rank implementa port.Searcher.
+// Rank implementa outbound.Searcher.
 func (f *Fuzzy) Rank(term string, candidates []domain.Tool) []domain.Match {
 	term = strings.TrimSpace(strings.ToLower(term))
 	if term == "" || len(candidates) == 0 {
@@ -60,7 +51,6 @@ func (f *Fuzzy) Rank(term string, candidates []domain.Tool) []domain.Match {
 
 	found := fuzzy.FindFrom(term, src)
 	out := make([]domain.Match, 0, len(found))
-	now := f.clock.Now()
 
 	for _, m := range found {
 		tool := candidates[m.Index]
@@ -89,13 +79,6 @@ func (f *Fuzzy) Rank(term string, candidates []domain.Tool) []domain.Match {
 		}
 
 		match := domain.Match{Tool: tool, Score: score}
-		if f.usage != nil {
-			u := f.usage(tool.ID)
-			match.Usage = u
-			// Peso deliberadamente modesto: o uso desempata, não domina.
-			score += 0.5 * u.Score(now)
-			match.Score = score
-		}
 
 		// As posições do fuzzy apontam para o corpus concatenado; só as
 		// mantemos quando caem dentro do nome, que é o que a lista desenha.

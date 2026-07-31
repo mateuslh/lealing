@@ -1,10 +1,9 @@
-// Package port declara as fronteiras do hexágono.
+// Package inbound declara as portas de entrada (driving) da aplicação.
 //
-// Portas de entrada (driving) são o que o mundo externo pede ao core; portas
-// de saída (driven) são o que o core pede ao mundo externo. Ambas são
-// declaradas aqui, do lado de dentro, para que a dependência sempre aponte
-// para o domínio — adapters implementam ou consomem, nunca o contrário.
-package port
+// Um adapter de entrada, como a TUI, só pode pedir casos de uso por estes
+// contratos. Ele nunca consulta diretamente uma porta de saída: a aplicação
+// é quem orquestra repositórios, processos, relógio e sistema de arquivos.
+package inbound
 
 import (
 	"context"
@@ -58,4 +57,17 @@ type Preferences interface {
 	ToggleFavorite(ctx context.Context, id domain.ToolID) (bool, error)
 	// Usage devolve as estatísticas de uma tool.
 	Usage(ctx context.Context, id domain.ToolID) (domain.Usage, error)
+	// RecordRun contabiliza um uso. Uma tool com tela própria nunca passa
+	// pelo Launcher — abrir a tela é o uso —, então o driving adapter pede
+	// explicitamente este caso de uso.
+	RecordRun(ctx context.Context, id domain.ToolID) error
+}
+
+// Prerequisites é o caso de uso que prepara a abertura de uma tool.
+//
+// A implementação resolve a tool pelo catálogo e consulta as dependências
+// externas por uma porta de saída. A TUI recebe só o resultado e, assim, não
+// conhece PATH, sistema de arquivos nem o adapter concreto da checagem.
+type Prerequisites interface {
+	Missing(ctx context.Context, id domain.ToolID) ([]domain.Requirement, error)
 }

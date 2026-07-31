@@ -34,9 +34,12 @@ type Vault struct {
 
 var _ ccaccount.Vault = (*Vault)(nil)
 
-// NewVault monta o cofre da plataforma.
-func NewVault() ccaccount.Vault {
-	return &Vault{keychain: &keychain{service: keychainService}, file: NewFileVault()}
+// NewVault monta o cofre da plataforma com o fallback explícito.
+func NewVault(credentialsPath string) ccaccount.Vault {
+	return &Vault{
+		keychain: &keychain{service: keychainService},
+		file:     NewFileVault(credentialsPath),
+	}
 }
 
 // Read implementa ccaccount.Vault.

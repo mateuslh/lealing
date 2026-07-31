@@ -10,24 +10,31 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
+	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
-// Slog adapta log/slog à porta port.Logger.
+// Slog adapta log/slog à porta outbound.Logger.
 type Slog struct {
 	l      *slog.Logger
 	closer io.Closer
 }
 
-var _ port.Logger = (*Slog)(nil)
+var _ outbound.Logger = (*Slog)(nil)
 
 // NewFile abre (ou cria) o arquivo de log em modo append.
 func NewFile(path string, level slog.Level) (*Slog, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := xdg.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
+		return nil, err
+	}
+	// Sob sudo o log nasceria com dono root e travaria o `-debug` seguinte,
+	// que roda como o usuário e só sabe abrir em append.
+	if err := xdg.Adopt(path); err != nil {
+		f.Close()
 		return nil, err
 	}
 	handler := slog.NewTextHandler(f, &slog.HandlerOptions{Level: level})
@@ -39,16 +46,16 @@ func NewDiscard() *Slog {
 	return &Slog{l: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
-// Debug implementa port.Logger.
+// Debug implementa outbound.Logger.
 func (s *Slog) Debug(msg string, kv ...any) { s.l.Debug(msg, kv...) }
 
-// Info implementa port.Logger.
+// Info implementa outbound.Logger.
 func (s *Slog) Info(msg string, kv ...any) { s.l.Info(msg, kv...) }
 
-// Warn implementa port.Logger.
+// Warn implementa outbound.Logger.
 func (s *Slog) Warn(msg string, kv ...any) { s.l.Warn(msg, kv...) }
 
-// Error implementa port.Logger.
+// Error implementa outbound.Logger.
 func (s *Slog) Error(msg string, kv ...any) { s.l.Error(msg, kv...) }
 
 // Close libera o arquivo subjacente, se houver.

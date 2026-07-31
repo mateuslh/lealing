@@ -173,6 +173,18 @@ func TestToolValidate(t *testing.T) {
 		"sem categoria": {ID: "a/b", Name: "b"},
 		"kind inválido": {ID: "a/b", Name: "b", Category: "a", Kind: 99},
 		"risk inválido": {ID: "a/b", Name: "b", Category: "a", Risk: 99},
+		"requisito vazio": {
+			ID: "a/b", Name: "b", Category: "a",
+			Requirements: []domain.Requirement{{Name: "Git"}},
+		},
+		"requisito com argumentos": {
+			ID: "a/b", Name: "b", Category: "a",
+			Requirements: []domain.Requirement{{Executable: "git status"}},
+		},
+		"requisito duplicado": {
+			ID: "a/b", Name: "b", Category: "a",
+			Requirements: []domain.Requirement{{Executable: "git"}, {Executable: "git"}},
+		},
 	}
 	for name, tool := range invalid {
 		t.Run(name, func(t *testing.T) {

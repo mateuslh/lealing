@@ -8,6 +8,8 @@ package macos_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,7 +46,23 @@ func TestSmokePower(t *testing.T) {
 
 func TestSmokeTokens(t *testing.T) {
 	skipShort(t)
-	svc := tokens.NewService(nil, usage.NewClaudeCode(), usage.NewCodex())
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("sem diretório do usuário: %v", err)
+	}
+	svc := tokens.NewService(nil,
+		usage.NewClaudeCode(
+			filepath.Join(home, ".claude", "projects"),
+			usage.NewLocalCredentials(
+				filepath.Join(home, ".claude", ".credentials.json"),
+				true,
+			),
+		),
+		usage.NewCodex(
+			filepath.Join(home, ".codex", "sessions"),
+			usage.NewCodexFile(filepath.Join(home, ".codex", "auth.json")),
+		),
+	)
 	start := time.Now()
 	r, err := svc.Generate(context.Background())
 	if err != nil {

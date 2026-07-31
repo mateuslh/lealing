@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -32,19 +31,29 @@ type Applier struct {
 	host   string
 	binary string
 	pkg    string
+	target Target
 	client *http.Client
 }
 
 var _ core.Applier = (*Applier)(nil)
 
+// Target identifica o artefato que esta instalação consome. É injetado pelo
+// composition root para que o adapter não selecione plataforma por conta
+// própria e para que os testes possam cobrir qualquer combinação.
+type Target struct {
+	OS   string
+	Arch string
+}
+
 // NewApplier monta o aplicador. binary é o nome do executável dentro do
 // arquivo compactado, pkg é o pacote main usado ao recompilar do fonte.
-func NewApplier(repo Repo, binary, pkg string) *Applier {
+func NewApplier(repo Repo, binary, pkg string, target Target) *Applier {
 	return &Applier{
 		repo:   repo,
 		host:   defaultDownloadHost,
 		binary: binary,
 		pkg:    pkg,
+		target: target,
 		client: &http.Client{Timeout: 5 * time.Minute},
 	}
 }
@@ -71,8 +80,11 @@ func (a *Applier) fromRelease(ctx context.Context, in core.Install, rel core.Rel
 			"sem permissão de escrita em %s — reinstale com o install.sh ou rode com privilégio",
 			filepath.Dir(in.BinaryPath))
 	}
+	if a.target.OS == "" || a.target.Arch == "" {
+		return core.Outcome{}, fmt.Errorf("%w: plataforma de destino não configurada", core.ErrNoAsset)
+	}
 
-	asset := AssetName(a.binary, runtime.GOOS, runtime.GOARCH)
+	asset := AssetName(a.binary, a.target.OS, a.target.Arch)
 
 	sums, err := a.fetchChecksums(ctx, rel.Tag)
 	if err != nil {
@@ -224,10 +236,8 @@ func (a *Applier) download(ctx context.Context, url, dir, wantSum string) (strin
 // extractBinary tira o executável do arquivo compactado, devolvendo o caminho
 // do arquivo extraído dentro de dir.
 func extractBinary(archive, binary, dir string) (string, error) {
-	if strings.HasSuffix(archive, ".zip") || runtime.GOOS == "windows" {
-		if out, err := extractFromZip(archive, binary, dir); err == nil {
-			return out, nil
-		}
+	if strings.HasSuffix(strings.ToLower(archive), ".zip") {
+		return extractFromZip(archive, binary, dir)
 	}
 	return extractFromTarGz(archive, binary, dir)
 }

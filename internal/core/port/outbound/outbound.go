@@ -1,4 +1,8 @@
-package port
+// Package outbound declara as portas de saída (driven) da aplicação.
+//
+// Serviços do core consomem estes contratos; adapters de saída os
+// implementam. Nenhum adapter de entrada deve importar este pacote.
+package outbound
 
 import (
 	"context"
@@ -8,8 +12,7 @@ import (
 )
 
 // ToolProvider é uma fonte de tools. O registry agrega N providers, o que
-// permite crescer para centenas de tools sem um arquivo monolítico: cada
-// domínio (git, aws, k8s, notas...) publica o seu próprio provider.
+// permite crescer para centenas de tools sem um arquivo monolítico.
 type ToolProvider interface {
 	// Name identifica o provider em logs e diagnósticos.
 	Name() string
@@ -27,12 +30,12 @@ type ToolRepository interface {
 	Categories(ctx context.Context) ([]domain.Category, error)
 }
 
-// Searcher ranqueia tools contra um termo de busca. É uma porta própria
-// porque a estratégia é intercambiável (fuzzy, prefixo, embeddings) e o core
-// não deve conhecer nenhuma delas.
+// Searcher ranqueia tools contra um termo de busca.
+//
+// O adapter é deliberadamente textual: sinais de negócio como frequência,
+// recência e favoritos são combinados pelo serviço do catálogo, sem criar
+// uma dependência de volta do adapter para o caso de uso.
 type Searcher interface {
-	// Rank recebe os candidatos já filtrados e devolve apenas os que casam,
-	// ordenados por relevância decrescente.
 	Rank(term string, candidates []domain.Tool) []domain.Match
 }
 
@@ -44,14 +47,20 @@ type UsageStore interface {
 	Save(ctx context.Context, u domain.Usage) error
 }
 
-// ToolRunner executa uma tool de um Kind específico. O launcher escolhe o
-// runner pelo Kind declarado, mantendo aberto o conjunto de estratégias.
+// ToolRunner executa uma tool de um Kind específico.
 type ToolRunner interface {
 	// Supports informa se este runner atende ao Kind.
 	Supports(kind domain.Kind) bool
 	// Run executa a tool. O canal devolvido emite as transições de fase e é
 	// fechado ao término.
 	Run(ctx context.Context, t domain.Tool, args domain.Args) (<-chan domain.Session, error)
+}
+
+// RequirementChecker verifica as ferramentas externas declaradas no
+// catálogo antes que uma tool seja iniciada.
+type RequirementChecker interface {
+	// Missing devolve somente os requisitos cujo executável não está no PATH.
+	Missing(ctx context.Context, requirements []domain.Requirement) []domain.Requirement
 }
 
 // Clock abstrai o tempo, para que score, recência e duração sejam testáveis

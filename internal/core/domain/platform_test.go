@@ -65,11 +65,3 @@ func TestPlatformExibicao(t *testing.T) {
 		}
 	}
 }
-
-func TestCurrentPlatformCasaComOGOOS(t *testing.T) {
-	// O binário de teste roda na mesma plataforma que o programa: se a
-	// detecção falhar aqui, o catálogo inteiro some em produção.
-	if got := domain.CurrentPlatform(); got == 0 {
-		t.Error("CurrentPlatform não reconheceu o sistema em que os testes rodam")
-	}
-}

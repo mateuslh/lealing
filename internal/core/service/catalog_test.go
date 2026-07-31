@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
 )
 
@@ -66,7 +66,7 @@ func (s *fakeStore) Save(_ context.Context, u domain.Usage) error {
 // prefixSearcher ranqueia por prefixo do nome — determinístico e suficiente
 // para testar o pipeline sem depender do algoritmo fuzzy real.
 //
-// Ordena o resultado porque o contrato de port.Searcher exige relevância
+// Ordena o resultado porque o contrato de outbound.Searcher exige relevância
 // decrescente: SortRelevance confia nessa ordem e não reordena.
 type prefixSearcher struct{}
 
@@ -83,7 +83,7 @@ func (prefixSearcher) Rank(term string, candidates []domain.Tool) []domain.Match
 
 var testNow = time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 
-func fixedClock() port.Clock { return port.ClockFunc(func() time.Time { return testNow }) }
+func fixedClock() outbound.Clock { return outbound.ClockFunc(func() time.Time { return testNow }) }
 
 func fixture() *fakeRepo {
 	return &fakeRepo{
@@ -200,6 +200,23 @@ func TestBrowseUsaSearcherQuandoHaTermo(t *testing.T) {
 	// prefixSearcher pontua nomes curtos mais alto; SortRelevance preserva.
 	if got := page.Items[0].Tool.Name; got != "stash" {
 		t.Errorf("primeiro = %s, quero stash", got)
+	}
+}
+
+func TestBrowseCombinaRelevanciaTextualComUsoNoCore(t *testing.T) {
+	store := newStore(domain.Usage{
+		ToolID:  "git/status",
+		Runs:    20,
+		LastRun: testNow,
+	})
+	svc := service.NewCatalog(fixture(), prefixSearcher{}, store, fixedClock())
+
+	page, err := svc.Browse(context.Background(), domain.Query{Term: "st"})
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	if got := page.Items[0].Tool.ID; got != "git/status" {
+		t.Errorf("primeiro = %s, quero a tool frequente git/status", got)
 	}
 }
 

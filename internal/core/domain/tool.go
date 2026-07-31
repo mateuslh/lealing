@@ -95,6 +95,11 @@ type Tool struct {
 	// um adapter nativo declara — e some do catálogo nas outras plataformas.
 	Platforms Platform
 
+	// Requirements são executáveis externos que precisam estar no PATH antes
+	// de iniciar a tool. Declarar aqui permite à TUI explicar a ausência antes
+	// que uma tela abra e falhe no primeiro comando.
+	Requirements []Requirement
+
 	// Glyph é o ícone exibido na lista. Vazio herda o glyph da categoria.
 	Glyph string
 	// Keywords alimentam a busca sem poluir o nome exibido (sinônimos,
@@ -143,11 +148,36 @@ func (t Tool) SearchCorpus() string {
 		b.WriteByte(' ')
 		b.WriteString(k)
 	}
+	for _, requirement := range t.Requirements {
+		b.WriteByte(' ')
+		b.WriteString(requirement.Executable)
+		b.WriteByte(' ')
+		b.WriteString(requirement.Name)
+	}
 	for _, tag := range t.Tags {
 		b.WriteByte(' ')
 		b.WriteString(string(tag))
 	}
 	return strings.ToLower(b.String())
+}
+
+// Requirement descreve uma ferramenta externa necessária.
+type Requirement struct {
+	// Executable é o nome procurado no PATH, sem caminho nem argumentos.
+	Executable string
+	// Name é o nome amigável mostrado ao usuário. Vazio usa Executable.
+	Name string
+	// InstallHint explica como resolver a ausência sem tentar instalar nada
+	// automaticamente.
+	InstallHint string
+}
+
+// Label devolve o nome de exibição do requisito.
+func (r Requirement) Label() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return r.Executable
 }
 
 // HasTag informa se a tool carrega a tag indicada.

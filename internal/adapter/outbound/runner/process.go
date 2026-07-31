@@ -8,7 +8,7 @@ import (
 	"os/exec"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
 // CommandResolver traduz uma tool + args na linha de comando concreta.
@@ -16,25 +16,25 @@ import (
 // reais, e para que providers definam a própria convenção de argumentos.
 type CommandResolver func(t domain.Tool, args domain.Args) (name string, argv []string, err error)
 
-// Process implementa port.ToolRunner para KindProcess e KindScript.
+// Process implementa outbound.ToolRunner para KindProcess e KindScript.
 type Process struct {
 	resolve CommandResolver
-	log     port.Logger
+	log     outbound.Logger
 }
 
-var _ port.ToolRunner = (*Process)(nil)
+var _ outbound.ToolRunner = (*Process)(nil)
 
 // NewProcess monta o runner de processos externos.
-func NewProcess(resolve CommandResolver, log port.Logger) *Process {
+func NewProcess(resolve CommandResolver, log outbound.Logger) *Process {
 	return &Process{resolve: resolve, log: log}
 }
 
-// Supports implementa port.ToolRunner.
+// Supports implementa outbound.ToolRunner.
 func (p *Process) Supports(kind domain.Kind) bool {
 	return kind == domain.KindProcess || kind == domain.KindScript
 }
 
-// Run implementa port.ToolRunner.
+// Run implementa outbound.ToolRunner.
 //
 // O canal é bufferizado com folga para as três transições possíveis, de modo
 // que a goroutine nunca bloqueia caso ninguém esteja lendo — a TUI pode ter
@@ -78,53 +78,6 @@ func (p *Process) Run(ctx context.Context, t domain.Tool, args domain.Args) (<-c
 
 		if p.log != nil {
 			p.log.Debug("processo finalizado", "tool", t.ID, "fase", final.Phase, "exit", final.ExitCode)
-		}
-		updates <- final
-	}()
-
-	return updates, nil
-}
-
-// BuiltinFunc é a assinatura de uma tool que roda dentro do processo da TUI.
-type BuiltinFunc func(ctx context.Context, args domain.Args) error
-
-// Builtin implementa port.ToolRunner para KindBuiltin, despachando por ID.
-type Builtin struct {
-	handlers map[domain.ToolID]BuiltinFunc
-}
-
-var _ port.ToolRunner = (*Builtin)(nil)
-
-// NewBuiltin monta o runner interno.
-func NewBuiltin() *Builtin {
-	return &Builtin{handlers: make(map[domain.ToolID]BuiltinFunc)}
-}
-
-// Register associa um handler a um ToolID.
-func (b *Builtin) Register(id domain.ToolID, fn BuiltinFunc) { b.handlers[id] = fn }
-
-// Supports implementa port.ToolRunner.
-func (b *Builtin) Supports(kind domain.Kind) bool { return kind == domain.KindBuiltin }
-
-// Run implementa port.ToolRunner.
-func (b *Builtin) Run(ctx context.Context, t domain.Tool, args domain.Args) (<-chan domain.Session, error) {
-	fn, ok := b.handlers[t.ID]
-	if !ok {
-		return nil, domain.WrapTool(t.ID, domain.ErrToolNotFound)
-	}
-
-	updates := make(chan domain.Session, 3)
-	updates <- domain.Session{ToolID: t.ID, Phase: domain.PhaseRunning}
-
-	go func() {
-		defer close(updates)
-		final := domain.Session{ToolID: t.ID, Phase: domain.PhaseSucceeded}
-		if err := fn(ctx, args); err != nil {
-			final.Phase = domain.PhaseFailed
-			final.Err = err
-			if errors.Is(err, context.Canceled) {
-				final.Phase = domain.PhaseCanceled
-			}
 		}
 		updates <- final
 	}()

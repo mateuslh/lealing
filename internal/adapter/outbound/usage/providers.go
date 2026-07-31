@@ -29,9 +29,9 @@ var (
 	_ tokens.CreditReporter = (*ClaudeCode)(nil)
 )
 
-// NewClaudeCode monta o provedor com o caminho padrão.
-func NewClaudeCode() *ClaudeCode {
-	return &ClaudeCode{Root: homePath(".claude/projects"), Quota: NewClaudeQuota()}
+// NewClaudeCode monta o provedor com caminhos e credenciais explícitos.
+func NewClaudeCode(root string, credentials CredentialSource) *ClaudeCode {
+	return &ClaudeCode{Root: root, Quota: NewClaudeQuota(credentials)}
 }
 
 // Name implementa tokens.Provider.
@@ -135,9 +135,12 @@ var (
 // codexProvider rotula tudo que vem do Codex, no log e na conta.
 const codexProvider = "Codex"
 
-// NewCodex monta o provedor com o caminho padrão.
-func NewCodex() *Codex {
-	return &Codex{Root: homePath(".codex/sessions"), Quota: NewCodexQuota()}
+// NewCodex monta o provedor com caminhos e credenciais explícitos.
+func NewCodex(
+	root string,
+	credentials CodexCredentialSource,
+) *Codex {
+	return &Codex{Root: root, Quota: NewCodexQuota(credentials)}
 }
 
 // Name implementa tokens.Provider.

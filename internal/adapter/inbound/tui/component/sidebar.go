@@ -8,12 +8,19 @@ import (
 	"github.com/muesli/reflow/truncate"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
-	"github.com/mateuslh/lealing/internal/core/port"
 )
 
-// Sidebar lista as categorias do catálogo com a contagem de cada uma.
+// SidebarItem é uma opção de filtro acompanhada de sua contagem.
+type SidebarItem struct {
+	Name   string
+	Glyph  string
+	Count  int
+	Accent int
+}
+
+// Sidebar lista opções de uma seção da navegação lateral.
 type Sidebar struct {
-	Items    []port.CategoryView
+	Items    []SidebarItem
 	Selected int
 	Focused  bool
 	Width    int
@@ -60,7 +67,7 @@ func (s Sidebar) Render(th *theme.Theme) string {
 	return strings.Join(lines, "\n")
 }
 
-func (s Sidebar) renderItem(th *theme.Theme, it port.CategoryView, selected bool, countW int) string {
+func (s Sidebar) renderItem(th *theme.Theme, it SidebarItem, selected bool, countW int) string {
 	accent := th.SpectrumAt(it.Accent)
 
 	caret := "  "

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
 // fileSecrets guarda os perfis em um arquivo só do dono.
@@ -92,7 +94,7 @@ func (s *fileSecrets) write(box map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	if err := xdg.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
 	return writeAtomic(s.path, out, 0o600)

@@ -7,7 +7,8 @@ import (
 	"sync"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/inbound"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
 // UsageRecorder é o recorte do CatalogService de que o launcher depende.
@@ -16,14 +17,14 @@ type UsageRecorder interface {
 	RecordRun(ctx context.Context, id domain.ToolID) error
 }
 
-// LauncherService implementa port.Launcher despachando para o ToolRunner
+// LauncherService implementa inbound.Launcher despachando para o ToolRunner
 // capaz de atender o Kind da tool.
 type LauncherService struct {
-	repo     port.ToolRepository
-	runners  []port.ToolRunner
+	repo     outbound.ToolRepository
+	runners  []outbound.ToolRunner
 	recorder UsageRecorder
-	clock    port.Clock
-	log      port.Logger
+	clock    outbound.Clock
+	log      outbound.Logger
 
 	mu       sync.RWMutex
 	sessions map[domain.SessionID]*domain.Session
@@ -31,12 +32,18 @@ type LauncherService struct {
 	seq      uint64
 }
 
-var _ port.Launcher = (*LauncherService)(nil)
+var _ inbound.Launcher = (*LauncherService)(nil)
 
 // NewLauncher monta o serviço com o conjunto de runners disponíveis.
-func NewLauncher(repo port.ToolRepository, recorder UsageRecorder, clock port.Clock, log port.Logger, runners ...port.ToolRunner) *LauncherService {
+func NewLauncher(
+	repo outbound.ToolRepository,
+	recorder UsageRecorder,
+	clock outbound.Clock,
+	log outbound.Logger,
+	runners ...outbound.ToolRunner,
+) *LauncherService {
 	if clock == nil {
-		clock = port.SystemClock
+		clock = outbound.SystemClock
 	}
 	return &LauncherService{
 		repo:     repo,
@@ -49,11 +56,16 @@ func NewLauncher(repo port.ToolRepository, recorder UsageRecorder, clock port.Cl
 	}
 }
 
-// Launch implementa port.Launcher.
+// Launch implementa inbound.Launcher.
 //
 // A política de risco vive aqui, e não na TUI: qualquer driving adapter que
 // chame Launch em uma tool destrutiva sem confirmação recebe o mesmo erro.
-func (s *LauncherService) Launch(ctx context.Context, id domain.ToolID, args domain.Args, opts port.LaunchOptions) (domain.Session, error) {
+func (s *LauncherService) Launch(
+	ctx context.Context,
+	id domain.ToolID,
+	args domain.Args,
+	opts inbound.LaunchOptions,
+) (domain.Session, error) {
 	tool, err := s.repo.ByID(ctx, id)
 	if err != nil {
 		return domain.Session{}, err
@@ -129,7 +141,7 @@ func (s *LauncherService) consume(id domain.SessionID, cancel context.CancelFunc
 	s.mu.Unlock()
 }
 
-// Cancel implementa port.Launcher.
+// Cancel implementa inbound.Launcher.
 func (s *LauncherService) Cancel(_ context.Context, id domain.SessionID) error {
 	s.mu.Lock()
 	cancel, ok := s.cancels[id]
@@ -147,7 +159,7 @@ func (s *LauncherService) Cancel(_ context.Context, id domain.SessionID) error {
 	return nil
 }
 
-// Sessions implementa port.Launcher, devolvendo cópias ordenadas por início
+// Sessions implementa inbound.Launcher, devolvendo cópias ordenadas por início
 // decrescente.
 func (s *LauncherService) Sessions(_ context.Context) ([]domain.Session, error) {
 	s.mu.RLock()
@@ -174,7 +186,7 @@ func (s *LauncherService) finish(id domain.SessionID, phase domain.Phase, err er
 }
 
 // runnerFor escolhe o primeiro runner que declara suportar o Kind.
-func (s *LauncherService) runnerFor(kind domain.Kind) port.ToolRunner {
+func (s *LauncherService) runnerFor(kind domain.Kind) outbound.ToolRunner {
 	for _, r := range s.runners {
 		if r.Supports(kind) {
 			return r

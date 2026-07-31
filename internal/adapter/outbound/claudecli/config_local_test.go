@@ -17,7 +17,11 @@ import (
 // segurança para o dado do usuário: o que precisa sobreviver à troca de
 // conta é tudo, menos os caches presos à conta anterior.
 func TestConfigRealDaMaquinaAtravessaIntacto(t *testing.T) {
-	origem := ConfigPath()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("sem diretório do usuário: %v", err)
+	}
+	origem := ConfigPath(home)
 	raw, err := os.ReadFile(origem)
 	if err != nil {
 		t.Skipf("sem ~/.claude.json nesta máquina: %v", err)

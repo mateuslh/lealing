@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/inbound"
 )
 
 // SpectrumBar desenha a composição do catálogo como uma única barra
@@ -15,11 +15,11 @@ import (
 // É uma leitura que uma lista de números não dá: em um segundo o usuário vê
 // se o acervo está concentrado em dois domínios ou bem distribuído.
 type SpectrumBar struct {
-	Items []port.CategoryView
+	Items []inbound.CategoryView
 	Width int
 	// Highlight destaca uma categoria escurecendo as demais; vazio pinta
 	// todas com intensidade cheia.
-	Highlight port.CategoryView
+	Highlight inbound.CategoryView
 }
 
 // Render devolve a barra pronta.

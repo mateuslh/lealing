@@ -30,7 +30,7 @@ func TestTermoLiteralGanhaDeSubsequencia(t *testing.T) {
 		},
 	}
 
-	got := search.NewFuzzy(nil, nil).Rank("pmset", tools)
+	got := search.NewFuzzy().Rank("pmset", tools)
 	if len(got) == 0 {
 		t.Fatal("busca por “pmset” não achou nada")
 	}
@@ -42,7 +42,7 @@ func TestTermoLiteralGanhaDeSubsequencia(t *testing.T) {
 func TestTermoVazioDevolveTudoNaOrdemOriginal(t *testing.T) {
 	tools := []domain.Tool{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}}
 
-	got := search.NewFuzzy(nil, nil).Rank("   ", tools)
+	got := search.NewFuzzy().Rank("   ", tools)
 	if len(got) != len(tools) {
 		t.Fatalf("devolveu %d, quero %d", len(got), len(tools))
 	}
@@ -61,7 +61,7 @@ func TestNomeGanhaDeKeyword(t *testing.T) {
 		{ID: "power-control", Name: "Energia", Summary: "Perfis de energia."},
 	}
 
-	got := search.NewFuzzy(nil, nil).Rank("energia", tools)
+	got := search.NewFuzzy().Rank("energia", tools)
 	if got[0].Tool.ID != "power-control" {
 		t.Errorf("primeiro resultado = %s, quero power-control", got[0].Tool.ID)
 	}

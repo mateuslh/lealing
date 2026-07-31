@@ -20,7 +20,7 @@ const (
 	sidebarWidth    = 26
 	sidebarMinTotal = 94 // abaixo disso a sidebar rouba espaço demais do miolo
 	panelMinWidth   = 34
-	heroMinHeight   = 24 // altura mínima para o wordmark grande caber
+	heroMinHeight   = 28 // abaixo disso busca e catálogo têm prioridade
 	spectrumMinRows = 20
 )
 
@@ -31,21 +31,28 @@ func (m *Model) View(f tui.Frame) string {
 		return th.Ghost.Render("janela pequena demais")
 	}
 
+	innerW, innerH := f.Width-2, f.Height-2
 	sidebarW := 0
-	mainW := f.Width
-	if f.Width >= sidebarMinTotal && len(m.categories) > 0 {
+	mainW := innerW
+	if innerW >= sidebarMinTotal && len(m.categories) > 0 {
 		sidebarW = sidebarWidth
-		mainW = f.Width - sidebarW - 1 // -1 do divisor vertical
+		mainW = innerW - sidebarW - 1 // -1 do divisor vertical
 	}
 
-	main := m.viewMain(th, mainW, f.Height)
+	main := m.viewMain(th, mainW, innerH)
+	body := main
 	if sidebarW == 0 {
-		return main
+		return component.ColorFrame{
+			Title: "LEALING / HOME", Width: f.Width, Height: f.Height,
+		}.Render(th, body)
 	}
 
-	side := m.viewSidebar(th, sidebarW, f.Height)
-	divider := m.viewDivider(th, f.Height)
-	return lipgloss.JoinHorizontal(lipgloss.Top, side, divider, main)
+	side := m.viewSidebar(th, sidebarW, innerH)
+	divider := m.viewDivider(th, innerH)
+	body = lipgloss.JoinHorizontal(lipgloss.Top, side, divider, main)
+	return component.ColorFrame{
+		Title: "LEALING / HOME", Width: f.Width, Height: f.Height,
+	}.Render(th, body)
 }
 
 // viewDivider desenha a linha vertical entre sidebar e conteúdo, esmaecendo
@@ -68,14 +75,20 @@ func (m *Model) viewSidebar(th *theme.Theme, width, height int) string {
 	inner := width - 2
 	pad := lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
 
-	header := th.PanelTitle.Render("CATEGORIAS")
-	footer := th.Ghost.Render(fmt.Sprintf("%d tools no total", m.highlights.TotalTools))
+	footerText := fmt.Sprintf("%d tools no total", m.highlights.TotalTools)
+	if category, ok := m.selectedCategory(); ok {
+		count := m.filterPage.Total
+		if m.filterLoading {
+			count = m.categoryCount(category.ID)
+		}
+		footerText = fmt.Sprintf("%d em %s", count, category.Name)
+	}
+	footer := th.Ghost.Render(component.TruncateTail(footerText, inner))
 
 	// 3 linhas de cabeçalho (título + régua + respiro) e 2 de rodapé.
 	listH := max(height-6, 1)
-
 	list := component.Sidebar{
-		Items:    m.categories,
+		Items:    m.categorySidebarItems(),
 		Selected: m.cursor[zoneSidebar],
 		Focused:  m.focus == zoneSidebar && !m.searching,
 		Width:    inner,
@@ -83,7 +96,7 @@ func (m *Model) viewSidebar(th *theme.Theme, width, height int) string {
 	}.Render(th)
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		header,
+		th.PanelTitle.Render("CATEGORIAS"),
 		th.Divider.Render(strings.Repeat("╌", inner)),
 		"",
 		list,
@@ -92,6 +105,17 @@ func (m *Model) viewSidebar(th *theme.Theme, width, height int) string {
 	// Empurra o rodapé para a base da coluna.
 	filled := lipgloss.NewStyle().Width(inner).Height(height - 2).Render(body)
 	return pad.Render(lipgloss.JoinVertical(lipgloss.Left, filled, footer))
+}
+
+func (m *Model) categorySidebarItems() []component.SidebarItem {
+	items := make([]component.SidebarItem, len(m.categories))
+	for i, category := range m.categories {
+		items[i] = component.SidebarItem{
+			Name: category.Name, Glyph: category.Glyph,
+			Count: category.Count, Accent: category.Accent,
+		}
+	}
+	return items
 }
 
 // --- Conteúdo principal ------------------------------------------------
@@ -105,6 +129,8 @@ func (m *Model) viewMain(th *theme.Theme, width, height int) string {
 		return m.viewCentered(th, width, height, msg)
 	case m.searching:
 		return m.viewSearch(th, width, height)
+	case m.hasFilter():
+		return m.viewFilter(th, width, height)
 	default:
 		return m.viewBrowse(th, width, height)
 	}
@@ -112,7 +138,7 @@ func (m *Model) viewMain(th *theme.Theme, width, height int) string {
 
 // viewCentered centraliza um bloco no espaço disponível.
 func (m *Model) viewCentered(_ *theme.Theme, width, height int, content string) string {
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+	return component.Center(width, height, content)
 }
 
 // viewBrowse é a home propriamente dita: hero, espectro e destaques.
@@ -120,10 +146,20 @@ func (m *Model) viewBrowse(th *theme.Theme, width, height int) string {
 	pad := lipgloss.NewStyle().Padding(0, 2)
 	inner := max(width-4, 10)
 
-	blocks := []string{"", m.viewHero(th, inner, height)}
-	used := lipgloss.Height(blocks[1]) + 1
+	blocks := []string{""}
+	used := 1
 
-	if height >= spectrumMinRows && len(m.categories) > 1 {
+	if height >= heroMinHeight {
+		hero := m.viewHero(th, inner, height)
+		blocks = append(blocks, hero, "")
+		used += lipgloss.Height(hero) + 1
+	}
+
+	search := m.viewSearchField(th, inner, false)
+	blocks = append(blocks, search)
+	used += lipgloss.Height(search)
+
+	if height >= spectrumMinRows && len(m.categories) > 2 {
 		spectrum := m.viewSpectrum(th, inner)
 		blocks = append(blocks, "", spectrum)
 		used += lipgloss.Height(spectrum) + 1
@@ -153,7 +189,7 @@ func (m *Model) viewHero(th *theme.Theme, width, height int) string {
 	}
 
 	hero := component.Hero{
-		Greeting: greeting(m.clock.Now(), m.user),
+		Greeting: greeting(m.now(), m.user),
 		Tagline:  "seu centro de comando no terminal",
 		Stats:    stats,
 	}
@@ -165,11 +201,81 @@ func (m *Model) viewHero(th *theme.Theme, width, height int) string {
 
 // viewSpectrum desenha a composição do catálogo e sua legenda.
 func (m *Model) viewSpectrum(th *theme.Theme, width int) string {
-	bar := component.SpectrumBar{Items: m.categories, Width: width}
-	if m.focus == zoneSidebar && m.cursor[zoneSidebar] < len(m.categories) {
-		bar.Highlight = m.categories[m.cursor[zoneSidebar]]
-	}
+	// O primeiro item é "Todas": incluí-lo dobraria visualmente o total do
+	// catálogo, então só as categorias reais entram na composição.
+	bar := component.SpectrumBar{Items: m.categories[1:], Width: width}
 	return lipgloss.JoinVertical(lipgloss.Left, bar.Render(th), "", bar.Legend(th))
+}
+
+// viewFilter substitui os destaques por uma lista única. Manter favoritas
+// e recentes na tela faria a sidebar parecer apenas decorativa, pois ainda
+// haveria itens fora do filtro visíveis.
+func (m *Model) viewFilter(th *theme.Theme, width, height int) string {
+	pad := lipgloss.NewStyle().Padding(0, 2)
+	inner := max(width-4, 10)
+
+	search := m.viewSearchField(th, inner, false)
+	panelH := max(height-lipgloss.Height(search)-2, 3)
+	empty := "nenhuma tool corresponde ao filtro"
+	if m.filterLoading {
+		empty = "aplicando filtro…"
+	}
+
+	list := component.ToolList{
+		Items:      m.filterPage.Items,
+		Selected:   m.cursor[zoneSuggested],
+		Focused:    m.focus == zoneSuggested,
+		Width:      inner - 2,
+		Height:     panelH - 2,
+		Categories: m.catByID,
+		Detailed:   panelH >= 8,
+		Empty:      empty,
+	}.Render(th)
+
+	footer := fmt.Sprintf("%d tools", m.filterPage.Total)
+	if m.filterLoading {
+		footer = "carregando"
+	}
+	if m.filterPage.HasMore() {
+		footer = fmt.Sprintf("%d de %d", m.filterPage.Len(), m.filterPage.Total)
+	}
+	title, glyph, accent := m.filterPresentation(th)
+	panel := component.Panel{
+		Title:   title,
+		Glyph:   glyph,
+		Accent:  accent,
+		Focused: m.focus == zoneSuggested,
+		Footer:  footer,
+		Width:   inner,
+		Height:  panelH,
+	}.Render(th, list)
+
+	body := lipgloss.JoinVertical(lipgloss.Left, "", search, "", panel)
+	return pad.Render(lipgloss.NewStyle().MaxHeight(height).Render(body))
+}
+
+func (m *Model) filterPresentation(th *theme.Theme) (string, string, lipgloss.TerminalColor) {
+	category, hasCategory := m.selectedCategory()
+	if hasCategory {
+		return category.Name, category.Glyph, th.SpectrumAt(category.Accent)
+	}
+	return "tools", "⌘", th.Primary
+}
+
+func (m *Model) filterLabel() string {
+	category, hasCategory := m.selectedCategory()
+	if hasCategory {
+		return category.Name
+	}
+	return "todas"
+}
+
+func (m *Model) activeFilterCount() int {
+	category, hasCategory := m.selectedCategory()
+	if hasCategory {
+		return m.categoryCount(category.ID)
+	}
+	return m.highlights.TotalTools
 }
 
 // panelSpec descreve um painel de destaque antes de ser renderizado.
@@ -295,23 +401,7 @@ func (m *Model) viewSearch(th *theme.Theme, width, height int) string {
 	pad := lipgloss.NewStyle().Padding(0, 2)
 	inner := max(width-4, 10)
 
-	// Campo: prompt colorido + input + contador de resultados.
-	prompt := lipgloss.NewStyle().Foreground(th.Primary).Bold(true).Render("❯ ")
-	m.input.Width = max(inner-lipgloss.Width(prompt)-14, 8)
-	counter := ""
-	if m.input.Value() != "" {
-		counter = th.Counter.Render(fmt.Sprintf("%d/%d", m.results.Total, m.highlights.TotalTools))
-	}
-	field := component.Spread(prompt+m.input.View(), counter, inner-2)
-
-	box := component.Panel{
-		Title:   "buscar",
-		Glyph:   "⌘",
-		Accent:  th.Primary,
-		Focused: true,
-		Width:   inner,
-		Height:  3,
-	}.Render(th, field)
+	box := m.viewSearchField(th, inner, true)
 
 	resultsH := max(height-lipgloss.Height(box)-2, 5)
 	results := component.ToolList{
@@ -343,9 +433,40 @@ func (m *Model) viewSearch(th *theme.Theme, width, height int) string {
 	return pad.Render(lipgloss.NewStyle().MaxHeight(height).Render(body))
 }
 
+// viewSearchField mantém a command palette visível mesmo fora do modo de
+// digitação. O foco pode chegar aqui pelas setas; Enter passa a capturar o
+// teclado e troca o conteúdo abaixo pelos resultados.
+func (m *Model) viewSearchField(th *theme.Theme, width int, editing bool) string {
+	prompt := lipgloss.NewStyle().Foreground(th.Primary).Bold(true).Render("❯ ")
+	right := th.Ghost.Render("↵ buscar")
+	if editing && m.input.Value() != "" {
+		total := m.highlights.TotalTools
+		if m.hasFilter() {
+			total = m.activeFilterCount()
+		}
+		right = th.Counter.Render(fmt.Sprintf("%d/%d", m.results.Total, total))
+	}
+
+	rightW := lipgloss.Width(right)
+	m.input.Width = max(width-lipgloss.Width(prompt)-rightW-5, 8)
+	field := component.Spread(prompt+m.input.View(), right, width-2)
+
+	return component.Panel{
+		Title:   "command palette",
+		Glyph:   "⌕",
+		Accent:  th.Primary,
+		Focused: editing || m.focus == zoneSearch,
+		Width:   width,
+		Height:  3,
+	}.Render(th, field)
+}
+
 // searchEmptyMessage distingue "ainda não digitou" de "não achei nada".
 func (m *Model) searchEmptyMessage() string {
 	if m.input.Value() == "" {
+		if m.hasFilter() {
+			return "digite para buscar em " + m.filterLabel()
+		}
 		return "digite para buscar entre todas as tools"
 	}
 	return "nenhuma tool corresponde a “" + m.input.Value() + "”"
@@ -363,13 +484,23 @@ func (m *Model) Hints() []tui.Hint {
 			{Key: "esc", Label: "voltar"},
 		}
 	}
+	if m.focus == zoneSearch {
+		return []tui.Hint{
+			{Key: "↵", Label: "digitar"},
+			{Key: "↓", Label: "catálogo"},
+			{Key: "←", Label: "categorias"},
+			{Key: "/", Label: "buscar"},
+			{Key: "esc", Label: "voltar"},
+		}
+	}
 	return []tui.Hint{
 		{Key: "/", Label: "buscar"},
 		{Key: "↵", Label: "abrir"},
 		{Key: "f", Label: "favoritar"},
 		{Key: "↹", Label: "painel"},
-		{Key: "hjkl", Label: "navegar"},
+		{Key: "↑↓←→", Label: "navegar"},
 		{Key: "r", Label: "recarregar"},
+		{Key: "esc", Label: "voltar"},
 	}
 }
 

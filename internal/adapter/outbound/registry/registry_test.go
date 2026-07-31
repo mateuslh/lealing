@@ -6,12 +6,12 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
-func acervo() []port.ToolProvider {
+func acervo() []outbound.ToolProvider {
 	cats := []domain.Category{{ID: "system", Name: "Sistema"}}
-	return []port.ToolProvider{&registry.Static{
+	return []outbound.ToolProvider{&registry.Static{
 		Label:      "teste",
 		Categories: cats,
 		Tools: []domain.Tool{

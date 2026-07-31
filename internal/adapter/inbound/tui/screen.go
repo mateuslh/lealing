@@ -70,18 +70,27 @@ type ScreenFactory func() Screen
 // Screens associa tools às telas que as implementam.
 //
 // É a ponte entre o catálogo (que só sabe que a tool existe) e a TUI (que
-// sabe desenhá-la). Uma tool sem entrada aqui cai no Launcher, que a executa
-// como processo — é assim que tools internas e externas convivem sob o mesmo
-// gesto de "apertar enter".
+// sabe desenhá-la). Tools não nativas caem no Launcher; uma builtin sem
+// factory é recusada por validateWiring antes de a TUI abrir.
 type Screens map[domain.ToolID]ScreenFactory
 
 // Open devolve a tela da tool, se houver uma registrada.
 func (s Screens) Open(id domain.ToolID) (Screen, bool) {
 	factory, ok := s[id]
-	if !ok {
+	if !ok || factory == nil {
 		return nil, false
 	}
 	return factory(), true
+}
+
+// Has informa se existe factory sem construir a tela.
+//
+// O composition root usa esta consulta para validar a ligação entre catálogo
+// e TUI antes de abrir o loop; construir a tela ali dispararia estado e I/O
+// cedo demais.
+func (s Screens) Has(id domain.ToolID) bool {
+	factory, ok := s[id]
+	return ok && factory != nil
 }
 
 // NavigateMsg pede ao router para empilhar uma nova tela.

@@ -34,7 +34,7 @@ func Updater(version string) *coreselfupdate.Service {
 	return coreselfupdate.NewService(version,
 		selfupdate.NewLocator(modulePath),
 		selfupdate.NewGitHub(repo),
-		selfupdate.NewApplier(repo, binaryName, mainPackage),
+		selfupdate.NewApplier(repo, binaryName, mainPackage, currentTarget()),
 	)
 }
 

@@ -11,16 +11,16 @@ import (
 	"sync"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/internal/core/port"
+	"github.com/mateuslh/lealing/internal/core/port/outbound"
 )
 
-// Registry implementa port.ToolRepository.
+// Registry implementa outbound.ToolRepository.
 //
 // A carga é lazy e roda no máximo uma vez (sync.Once), então o custo de
 // validar centenas de tools é pago no primeiro acesso e nunca mais.
 type Registry struct {
-	providers []port.ToolProvider
-	log       port.Logger
+	providers []outbound.ToolProvider
+	log       outbound.Logger
 	// strict decide o que fazer com uma tool inválida: abortar a carga ou
 	// descartá-la com um warn. Em desenvolvimento, strict pega erros cedo.
 	strict bool
@@ -37,13 +37,13 @@ type Registry struct {
 	cats  []domain.Category
 }
 
-var _ port.ToolRepository = (*Registry)(nil)
+var _ outbound.ToolRepository = (*Registry)(nil)
 
 // Option configura o Registry na construção.
 type Option func(*Registry)
 
 // WithLogger injeta o logger usado para reportar tools descartadas.
-func WithLogger(l port.Logger) Option { return func(r *Registry) { r.log = l } }
+func WithLogger(l outbound.Logger) Option { return func(r *Registry) { r.log = l } }
 
 // WithStrict faz a carga falhar ao encontrar a primeira tool inválida.
 func WithStrict(strict bool) Option { return func(r *Registry) { r.strict = strict } }
@@ -55,7 +55,7 @@ func WithStrict(strict bool) Option { return func(r *Registry) { r.strict = stri
 func WithPlatform(p domain.Platform) Option { return func(r *Registry) { r.platform = p } }
 
 // New monta o registry sobre os providers informados.
-func New(providers []port.ToolProvider, opts ...Option) *Registry {
+func New(providers []outbound.ToolProvider, opts ...Option) *Registry {
 	r := &Registry{providers: providers}
 	for _, opt := range opts {
 		opt(r)
@@ -63,7 +63,7 @@ func New(providers []port.ToolProvider, opts ...Option) *Registry {
 	return r
 }
 
-// All implementa port.ToolRepository.
+// All implementa outbound.ToolRepository.
 func (r *Registry) All(ctx context.Context) ([]domain.Tool, error) {
 	if err := r.load(ctx); err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (r *Registry) All(ctx context.Context) ([]domain.Tool, error) {
 	return r.tools, nil
 }
 
-// ByID implementa port.ToolRepository.
+// ByID implementa outbound.ToolRepository.
 func (r *Registry) ByID(ctx context.Context, id domain.ToolID) (domain.Tool, error) {
 	if err := r.load(ctx); err != nil {
 		return domain.Tool{}, err
@@ -87,7 +87,7 @@ func (r *Registry) ByID(ctx context.Context, id domain.ToolID) (domain.Tool, err
 	return t, nil
 }
 
-// Categories implementa port.ToolRepository.
+// Categories implementa outbound.ToolRepository.
 func (r *Registry) Categories(ctx context.Context) ([]domain.Category, error) {
 	if err := r.load(ctx); err != nil {
 		return nil, err
@@ -190,9 +190,9 @@ type Static struct {
 	Categories []domain.Category
 }
 
-var _ port.ToolProvider = (*Static)(nil)
+var _ outbound.ToolProvider = (*Static)(nil)
 
-// Name implementa port.ToolProvider.
+// Name implementa outbound.ToolProvider.
 func (s *Static) Name() string {
 	if s.Label == "" {
 		return "static"
@@ -200,7 +200,7 @@ func (s *Static) Name() string {
 	return s.Label
 }
 
-// Provide implementa port.ToolProvider.
+// Provide implementa outbound.ToolProvider.
 func (s *Static) Provide(context.Context) ([]domain.Tool, []domain.Category, error) {
 	return s.Tools, s.Categories, nil
 }
