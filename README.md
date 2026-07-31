@@ -31,11 +31,13 @@ então rodar o instalador de novo não duplica nada. Num terminal novo, `lealing
 já funciona; no que está aberto, aplique com
 `export PATH="$HOME/.local/bin:$PATH"`.
 
-Variáveis: `LEALING_BIN_DIR` escolhe o destino, `LEALING_VERSION` a tag e
-`LEALING_NO_PATH=1` deixa o seu perfil em paz.
+Variáveis: `LEALING_BIN_DIR` escolhe o destino e `LEALING_NO_PATH=1` deixa o
+seu perfil em paz. Sem informar versão, o instalador sempre consulta e baixa
+a última release disponível. `LEALING_VERSION` existe apenas para quem quiser
+fixar deliberadamente uma tag antiga.
 
 ```sh
-LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.2 sh install.sh
+LEALING_BIN_DIR=/usr/local/bin sh install.sh
 ```
 
 No Windows, baixe `lealing_windows_amd64.zip` (ou `_arm64`) da
@@ -96,7 +98,7 @@ O trabalho normal termina em editar, commitar e dar push. Quando for hora de
 publicar, um mantenedor ou agente apenas solicita a versão:
 
 ```sh
-make release VERSION=v0.3.0
+make release VERSION=vX.Y.Z
 ```
 
 Esse alvo só dispara o
