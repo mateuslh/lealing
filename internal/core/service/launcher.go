@@ -92,8 +92,12 @@ func (s *LauncherService) Launch(
 		Started: s.clock.Now(),
 	}
 
+	// O valor devolvido por Launch é um snapshot. A sessão mutável guardada
+	// pelo serviço precisa de outra alocação; compartilhar &sess faria consume
+	// escrever no mesmo objeto enquanto o retorno ainda o copia para o caller.
+	stored := sess
 	s.mu.Lock()
-	s.sessions[sess.ID] = &sess
+	s.sessions[sess.ID] = &stored
 	s.cancels[sess.ID] = cancel
 	s.mu.Unlock()
 

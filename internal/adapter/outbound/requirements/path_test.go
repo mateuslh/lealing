@@ -11,15 +11,17 @@ import (
 )
 
 func TestPathCheckerDevolveSomenteAusentes(t *testing.T) {
-	dir := t.TempDir()
-	present := filepath.Join(dir, "presente")
-	if err := os.WriteFile(present, []byte{}, 0o755); err != nil {
+	present, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir)
+	presentName := filepath.Base(present)
+	// O próprio binário de teste tem o formato executável correto da
+	// plataforma (.exe no Windows e permissão de execução em sistemas Unix).
+	t.Setenv("PATH", filepath.Dir(present))
 
 	got := requirements.NewPathChecker().Missing(context.Background(), []domain.Requirement{
-		{Executable: "presente"},
+		{Executable: presentName},
 		{Executable: "ausente", Name: "Ferramenta ausente"},
 	})
 	if len(got) != 1 || got[0].Executable != "ausente" {

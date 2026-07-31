@@ -28,7 +28,13 @@ permissions:
   contents: write
 
 jobs:
+  # Reutiliza literalmente a mesma matriz do push. A release não pode passar
+  # por um atalho Ubuntu enquanto Windows ou o detector de corrida falham.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   goreleaser:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -35,7 +35,7 @@ Variáveis: `LEALING_BIN_DIR` escolhe o destino, `LEALING_VERSION` a tag e
 `LEALING_NO_PATH=1` deixa o seu perfil em paz.
 
 ```sh
-LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.1 sh install.sh
+LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.2 sh install.sh
 ```
 
 No Windows, baixe `lealing_windows_amd64.zip` (ou `_arm64`) da
