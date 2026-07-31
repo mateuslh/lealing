@@ -82,7 +82,8 @@ caso de uso fino é preferível a ligar TUI diretamente a disco ou processo.
 
 As tools históricas ainda são nativas. `token-usage` é a vertical de
 referência para uma tool externa: domínio, adapters e tela vivem em
-`cmd/tools/token-usage`, e a engine conhece apenas seu manifest e o protocolo.
+`github.com/mateuslh/lealing-tools`, e a engine conhece apenas seu manifest e
+o protocolo.
 Para uma nativa mínima, comece por `system-info`; para ver política e suporte
 parcial, leia `power`; para orquestração com vários recursos externos, leia
 `repoclone`.
@@ -609,7 +610,7 @@ Regras para agentes:
 | Caso de uso que orquestra portas | `internal/core/service/` |
 | Tela mínima, do zero | `screen/sysinfo/sysinfo.go` |
 | Tela com edição e confirmação | `screen/power/` |
-| Vertical externa com gráficos e abas | `cmd/tools/token-usage/` |
+| Vertical externa com gráficos e abas | `github.com/mateuslh/lealing-tools` · `cmd/token-usage/` |
 | Contrato serializável | `sdk/protocol/` |
 | Runtime Go de uma tool | `sdk/screen/` |
 | Tela genérica da engine | `screen/plugin/` |
@@ -621,7 +622,7 @@ Regras para agentes:
 | Escolha do adapter por sistema | `internal/bootstrap/platform.go` |
 | Validação catálogo ↔ tela ↔ runner | `internal/bootstrap/wiring.go` |
 | Matriz de suporte do acervo | `internal/bootstrap/matrix.go` · `lealing -platforms` |
-| Agregação e erro parcial externa | `cmd/tools/token-usage/internal/tokens/` |
+| Agregação e erro parcial externa | `lealing-tools/internal/tokenusage/tokens/` |
 | Como tudo se conecta | `internal/bootstrap/bootstrap.go` |
 
 ## 11. Criando uma tool externa `screen-v1`
@@ -644,30 +645,30 @@ ncurses arbitrário, PTY de debugger — não cabem em `screen-v1`.
 
 ### 11.2 Estrutura e imports
 
-Enquanto as oficiais estão neste monorepo:
+No repositório próprio da tool:
 
 ```text
-cmd/tools/minha-tool/
+cmd/minha-tool/
   main.go
-  manifest.yaml
-  internal/
-    domain/
-    adapter/
-    ui/
+internal/minhatool/
+  domain/
+  adapter/
+  ui/
+manifests/minha-tool.yaml
 ```
 
 O executável pode importar `github.com/mateuslh/lealing/sdk/protocol`,
 `sdk/screen` e `sdk/component`. Nunca importe `github.com/mateuslh/lealing/internal`.
-Depois da extração, a mesma árvore entra em `lealing-tools` sem mudar a
-engine. Um executável por tool é o contrato da v1.
+As oficiais usam `github.com/mateuslh/lealing-tools`; uma comunidade pode usar
+seu próprio módulo. Um executável por tool é o contrato da v1.
 
 ### 11.3 Manifest
 
-Comece por `cmd/tools/token-usage/manifest.yaml` e valide sem iniciar o
-binário:
+Comece por `manifests/token-usage.yaml` em `lealing-tools` e valide sem iniciar
+o binário:
 
 ```sh
-go run ./cmd/lealing -tool-validate ./cmd/tools/minha-tool/manifest.yaml
+lealing -tool-validate ./manifests/minha-tool.yaml
 ```
 
 O `apiVersion` é `lealing.dev/v1`; `runtime.kind` é `process`; o intervalo de
@@ -771,11 +772,12 @@ home real ou sleeps exatos. Pacotes com goroutines, pipes ou canais rodam com
 
 ### 11.9 Build, instalação local e rollback
 
-Para a vertical oficial de referência:
+No clone de `github.com/mateuslh/lealing-tools`, para a vertical oficial de
+referência:
 
 ```sh
-make tool-build
-make tool-install
+make build
+lealing -tool-install ./bin
 lealing -tools
 lealing -tool-rollback token-usage
 lealing -tool-remove token-usage
@@ -789,8 +791,9 @@ para a versão anterior. Remoção move a instalação para `.trash` e informa o
 caminho recuperável.
 
 Gere os quatro artefatos oficiais com `CGO_ENABLED=0`; o workflow
-`.github/workflows/tools.yml` executa fmt, vet, test, race, conformidade,
-cross-build, pacote por alvo e `checksums.txt`. Cada pacote contém seu manifest.
+`lealing-tools/.github/workflows/tools.yml` executa fmt, vet, test, race,
+conformidade, cross-build, pacote por alvo e `checksums.txt`. Cada pacote contém
+seu manifest.
 
 ### 11.10 Marketplace e versionamento
 
@@ -806,10 +809,10 @@ versão do protocolo e preserva negociação com versões antigas quando possív
 O catálogo HTTP fica para a fase após a extração. Até lá, instalação por
 arquivo/local é o caminho suportado e não depende de GitHub.
 
-Para extrair as oficiais, mova `cmd/tools/token-usage` e depois as outras
-verticais para `github.com/mateuslh/lealing-tools`, conserve os IDs e importe
-apenas o SDK público. Mova também o workflow de tools e conecte o último job à
-release do novo repositório. Não crie o remoto, tag ou release sem autorização.
+`token-usage` já foi extraída para `github.com/mateuslh/lealing-tools`. Migre as
+outras verticais em mudanças independentes, conserve os IDs e importe apenas o
+SDK público. O workflow do repositório das tools cria tag e release somente
+depois de toda a matriz verde. Não publique nova versão sem autorização.
 
 Antes de concluir, responda “sim” a todas:
 

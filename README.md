@@ -108,9 +108,12 @@ lealing -tool-rollback token-usage
 lealing -tool-remove token-usage
 ```
 
-No clone, a vertical oficial pode ser preparada e instalada com
-`make tool-build tool-install`. A engine abre normalmente sem nenhuma tool
-externa; uma ausente não vira item quebrado.
+A vertical oficial vive em
+[`mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools). Baixe e
+extraia o pacote da
+[última release](https://github.com/mateuslh/lealing-tools/releases/latest),
+então passe o diretório extraído a `lealing -tool-install`. A engine abre
+normalmente sem nenhuma tool externa; uma ausente não vira item quebrado.
 
 Instalações ficam em
 `~/.local/share/lealing/tools/<id>/<version>/` no macOS/Linux e em
@@ -118,9 +121,9 @@ Instalações ficam em
 para a versão atual, `previous` guarda o rollback e remoções recuperáveis vão
 para `.trash`. `XDG_DATA_HOME` continua tendo prioridade quando definido.
 
-Os downloads publicados devem apontar para a
-[última release disponível](https://github.com/mateuslh/lealing/releases/latest),
-nunca para uma versão numérica fixa.
+Manifest, checksums e índice do marketplace usam a
+[última release disponível](https://github.com/mateuslh/lealing-tools/releases/latest),
+nunca um link de documentação preso a uma versão numérica.
 
 ## Atualização
 
@@ -208,9 +211,10 @@ está guardada em nenhum perfil pede confirmação, porque depois da escrita
 aquela credencial não existe mais em lugar nenhum; e **feche as sessões do
 `claude` antes de trocar** — ao sair, a CLI regrava a conta em que estava.
 
-As tools históricas vieram do [Arteus Tools](../ArteusTools). `token-usage` é
-a primeira vertical separada em runtime: a engine não importa seu domínio,
-adapters nem model. Para criar outra sem editar o bootstrap, veja
+As tools históricas vieram do [Arteus Tools](../ArteusTools). `token-usage`
+foi extraída para
+[`lealing-tools`](https://github.com/mateuslh/lealing-tools): a engine não
+importa seu domínio, adapters nem model. Para criar outra sem editar o bootstrap, veja
 **[AGENTS.md](AGENTS.md#11-criando-uma-tool-externa-screen-v1)**.
 
 ## Plataformas
@@ -270,8 +274,9 @@ Flags: `-debug` (log em arquivo + validação estrita do catálogo),
 `-tool-update`, `-tool-remove`, `-tool-rollback`, `-tool-validate` e
 `-version`.
 
-Sem instalar tools: `make run`. Para renderizar `token-usage`, rode primeiro
-`make tool-install`; depois use `make render SIZE=150x42 KEYS='/token[enter]'`.
+Sem instalar tools: `make run`. Para renderizar `token-usage`, instale o pacote
+extraído da release oficial e use
+`make render SIZE=150x42 KEYS='/token[enter]'`.
 
 ## Atalhos
 
@@ -321,7 +326,6 @@ executável. A engine nunca importa o pacote concreto da tool.
 
 ```
 cmd/lealing/                    binário e flags da engine
-cmd/tools/token-usage/          executável externo da vertical inicial
 sdk/
   protocol/                     DTOs + framing; somente biblioteca padrão
   screen/                       adapter Bubble Tea para screen-v1
@@ -382,10 +386,11 @@ make cover    # relatório de cobertura
 
 A suíte cobre framing parcial, limite de mensagens, handshake, crash,
 cancelamento, shutdown, capabilities, manifests, descoberta sem spawn,
-instalação/rollback, sanitização ANSI, a vertical de tokens, parsers nativos e
-as fronteiras de dependência. A **geometria da TUI** renderiza as telas da
-engine e a `token-usage` em nove tamanhos, de 200×60 a 26×8, verificando que
-nenhuma linha excede o frame.
+instalação/rollback, sanitização ANSI, a PluginScreen genérica, parsers nativos
+e as fronteiras de dependência. A **geometria da TUI** renderiza as telas da
+engine em nove tamanhos, de 200×60 a 26×8, verificando que nenhuma linha excede
+o frame. Domínio, adapters e geometria reais de `token-usage` são testados no
+repositório [`lealing-tools`](https://github.com/mateuslh/lealing-tools).
 
 Os adapters de plataforma não têm build tag: o que é específico do sistema é o
 processo que eles disparam, não o código Go. Por isso os parsers do Windows

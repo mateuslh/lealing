@@ -26,18 +26,9 @@ func TestDependenciasApontamParaDentro(t *testing.T) {
 	files := projectSources(t)
 
 	for _, file := range files {
-		isExternalTool := strings.HasPrefix(file.rel, "cmd/tools/")
-		if isExternalTool {
-			for _, imported := range file.imports {
-				if strings.HasPrefix(imported, module+"/internal/") {
-					t.Errorf("%s: tool externa importa internal da engine %q", file.rel, imported)
-				}
-			}
-		} else {
-			for _, imported := range file.imports {
-				if strings.HasPrefix(imported, module+"/cmd/tools/") {
-					t.Errorf("%s: engine importa implementação concreta de tool %q", file.rel, imported)
-				}
+		for _, imported := range file.imports {
+			if strings.HasPrefix(imported, module+"/cmd/tools/") {
+				t.Errorf("%s: engine importa implementação concreta de tool %q", file.rel, imported)
 			}
 		}
 		// Testes de integração podem montar o grafo real e, portanto, importar
@@ -47,8 +38,6 @@ func TestDependenciasApontamParaDentro(t *testing.T) {
 			continue
 		}
 		switch {
-		case isExternalTool:
-
 		case strings.HasPrefix(file.rel, "sdk/protocol/"):
 			for _, imported := range file.imports {
 				if isThirdParty(imported) {
@@ -124,6 +113,15 @@ func TestSelecaoDePlataformaFicaNoCompositionRoot(t *testing.T) {
 				t.Errorf("%s: importa runtime; seleção de GOOS/GOARCH pertence a internal/bootstrap/platform.go", file.rel)
 			}
 		}
+	}
+}
+
+func TestEngineNaoHospedaImplementacaoConcretaDeToolExterna(t *testing.T) {
+	path := filepath.Join(projectRoot(t), "cmd", "tools")
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("%s existe: tools externas pertencem a repositórios próprios", path)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 
