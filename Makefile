@@ -16,7 +16,7 @@ GO_BIN      := $(shell command -v go)
 SIZE ?= 150x44
 KEYS ?=
 
-.PHONY: all build build-windows cross snapshot run test bench cover lint fmt vet render tidy clean install
+.PHONY: all build build-windows cross snapshot release run test bench cover lint fmt vet render tidy clean install
 
 all: build
 
@@ -42,6 +42,14 @@ cross: ## verifica se o código compila nas plataformas suportadas
 # É como conferir o .goreleaser.yaml antes de empurrar uma tag.
 snapshot: ## monta os artefatos de release em dist/ sem publicar
 	goreleaser release --snapshot --clean
+
+release: ## solicita à pipeline a publicação de VERSION=vX.Y.Z
+	@if [ "$(origin VERSION)" != "command line" ]; then \
+		echo 'uso: make release VERSION=vX.Y.Z'; \
+		exit 2; \
+	fi
+	@gh workflow run release.yml --field version='$(VERSION)'
+	@echo 'pipeline de $(VERSION) acionada: gh run list --workflow release.yml'
 
 run: ## abre a TUI
 	go run $(PKG)

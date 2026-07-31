@@ -35,7 +35,7 @@ Variáveis: `LEALING_BIN_DIR` escolhe o destino, `LEALING_VERSION` a tag e
 `LEALING_NO_PATH=1` deixa o seu perfil em paz.
 
 ```sh
-LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.0 sh install.sh
+LEALING_BIN_DIR=/usr/local/bin LEALING_VERSION=v0.2.1 sh install.sh
 ```
 
 No Windows, baixe `lealing_windows_amd64.zip` (ou `_arm64`) da
@@ -92,14 +92,21 @@ bater**; o `--ff-only` nunca faz merge automático em um clone com trabalho
 local; e a troca do executável é um rename no mesmo volume, então ou você fica
 com o binário novo, ou com o antigo — nunca com um pela metade.
 
-Publicar uma versão nova é empurrar uma tag: o
-[workflow de release](.github/workflows/release.yml) roda o GoReleaser, que
-compila macOS, Windows e Linux (amd64 e arm64), gera o `checksums.txt` e cria
-a release.
+O trabalho normal termina em editar, commitar e dar push. Quando for hora de
+publicar, um mantenedor ou agente apenas solicita a versão:
 
 ```sh
-git tag -a v0.1.0 -m "primeira release" && git push origin v0.1.0
+make release VERSION=v0.3.0
 ```
+
+Esse alvo só dispara o
+[workflow de release](.github/workflows/release.yml). Dentro da pipeline, o
+projeto é validado e empacotado primeiro; só depois ela cria a tag anotada,
+compila macOS, Windows e Linux (amd64 e arm64), gera o `checksums.txt` e cria
+a release. O clone local não cria tag nem faz um commit especial de release.
+
+`VERSION` é obrigatório e precisa seguir `vX.Y.Z`. Tag já usada, formatação
+pendente, teste quebrado ou falha de compilação interrompem a publicação.
 
 ## Tools
 

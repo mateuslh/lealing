@@ -70,17 +70,31 @@ func TestFindRepositoriesNaoEntraDentroDeClone(t *testing.T) {
 	}
 }
 
-func TestScannerLeRepositorioReal(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
+func TestScannerLeRepositorioTemporario(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
 		t.Skip("git não está no PATH")
 	}
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
-	if err != nil {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
-		t.Skip("checkout de teste não contém .git")
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(git, append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
 	}
+	runGit("init")
+	runGit("config", "user.name", "Lealing Test")
+	runGit("config", "user.email", "lealing@example.invalid")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "README.md")
+	runGit("commit", "-m", "fixture")
 
 	report, err := New(root, nil).Scan(context.Background())
 	if err != nil {

@@ -1,16 +1,27 @@
-# Publica os binários quando uma tag `v*` é empurrada.
+# Publica os binários quando uma versão é solicitada pelo workflow ou quando
+# uma tag `v*` é empurrada pelo fluxo legado.
 #
-#   git tag -a v0.2.0 -m "release v0.2.0" && git push origin v0.2.0
+#   gh workflow run release.yml --field version=v0.2.1
 #
-# O GoReleaser compila macOS, Windows e Linux (amd64 e arm64), gera o
-# checksums.txt e cria a release — que é de onde o install.sh e a tool
-# "Atualizar o lealing" baixam.
+# No fluxo normal a própria pipeline valida o checkout, cria a tag e roda o
+# GoReleaser. Assim desenvolver continua sendo editar, commitar e dar push;
+# publicar não exige manipular tags no clone local.
 name: release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão SemVer com prefixo v, por exemplo v0.2.1"
+        required: true
+        type: string
   push:
     tags:
       - "v*"
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   # Criar a release e subir os artefatos exige escrita no repositório.
@@ -30,6 +41,55 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # A tag só nasce depois que o mesmo empacotamento da release passou.
+      # Isso evita publicar uma referência que já sabemos que não compila.
+      - name: Verifica arquitetura e formatação
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted=$(gofmt -l -s .)
+          if [[ -n "$unformatted" ]]; then
+            printf 'arquivos sem gofmt:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          make vet cross
+
+      - name: Ensaia todos os artefatos
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+
+      - name: Cria ou confere a tag solicitada
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "versão inválida: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+
+          git fetch origin --tags
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_VERSION"; then
+            tag_commit=$(git rev-list -n 1 "$RELEASE_VERSION")
+            head_commit=$(git rev-parse HEAD)
+            if [[ "$tag_commit" != "$head_commit" ]]; then
+              echo "$RELEASE_VERSION já aponta para outro commit" >&2
+              exit 1
+            fi
+            echo "$RELEASE_VERSION já aponta para este commit; reutilizando a tag"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_VERSION" -m "release $RELEASE_VERSION"
+            git push origin "refs/tags/$RELEASE_VERSION"
+          fi
 
       - uses: goreleaser/goreleaser-action@v6
         with:

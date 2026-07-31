@@ -542,7 +542,30 @@ diff.
 
 ---
 
-## 8. Convenções que o revisor vai cobrar
+## 8. Publicando uma versão
+
+O desenvolvimento normal termina com as mudanças commitadas e enviadas à
+`main`. Não crie tag no clone nem faça commit artificial de release. Quando o
+usuário pedir explicitamente para publicar, acione:
+
+```sh
+make release VERSION=vX.Y.Z
+```
+
+O alvo local apenas solicita `.github/workflows/release.yml`. A pipeline roda
+as validações e um snapshot completo, cria a tag anotada no commit remoto e só
+então publica os binários e o `checksums.txt`. A IA deve acompanhar o workflow
+até o fim e conferir a release, não apenas informar que o disparo funcionou.
+
+Regras para agentes:
+
+- nunca mova, apague ou recrie uma tag já enviada;
+- se uma pipeline falhar, corrija a causa e publique uma versão nova;
+- nunca use `--no-verify` para atravessar uma validação;
+- confira a conclusão do workflow e os artefatos antes de afirmar que a
+  release foi publicada.
+
+## 9. Convenções que o revisor vai cobrar
 
 - **`ID` é permanente.** Favoritos e estatísticas são gravados por ID em
   `~/.local/share/lealing/usage.json`. Renomear descarta o histórico do
@@ -572,7 +595,7 @@ diff.
   "o Mac", no `Summary` de uma tool que roda nos dois — o `Detail` é o lugar
   de explicar a diferença.
 
-## 9. Onde olhar quando travar
+## 10. Onde olhar quando travar
 
 | Dúvida | Arquivo |
 |---|---|
