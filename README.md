@@ -3,6 +3,13 @@
 Centro de comando de tools no terminal. Uma TUI em Go + Bubble Tea desenhada
 para acomodar centenas de ferramentas sem virar um menu interminável.
 
+O lealing é dividido em **engine** e **tools instaláveis**. A engine é dona do
+terminal, home, busca, favoritos, chrome, segurança, instalação e processos.
+Uma tool `screen-v1` roda em outro processo, mantém domínio, adapters e estado
+visual próprios e envia somente snapshots JSON versionados. Assim ela pode ser
+instalada ou atualizada sem publicar outra versão da engine — e um crash da
+tool não derruba a TUI.
+
 ```
 ██╗     ███████╗ █████╗ ██╗     ██╗███╗   ██╗ ██████╗
 ██║     ██╔════╝██╔══██╗██║     ██║████╗  ██║██╔════╝
@@ -77,6 +84,44 @@ anterior em vez de deixar você sem ferramenta.
 Mover o repositório de lugar exige rodar `make install` de novo: o wrapper
 guarda o caminho absoluto. Para desinstalar, `make uninstall`.
 
+### Tools externas
+
+Liste o que está instalado:
+
+```sh
+lealing -tools
+```
+
+Um pacote local é um diretório com `manifest.yaml` e o executável da
+plataforma. Validar e instalar não executa a tool:
+
+```sh
+lealing -tool-validate ./pacote/manifest.yaml
+lealing -tool-install ./pacote
+```
+
+Uma atualização local usa o mesmo formato e preserva a versão anterior:
+
+```sh
+lealing -tool-update ./pacote-novo
+lealing -tool-rollback token-usage
+lealing -tool-remove token-usage
+```
+
+No clone, a vertical oficial pode ser preparada e instalada com
+`make tool-build tool-install`. A engine abre normalmente sem nenhuma tool
+externa; uma ausente não vira item quebrado.
+
+Instalações ficam em
+`~/.local/share/lealing/tools/<id>/<version>/` no macOS/Linux e em
+`%LOCALAPPDATA%\lealing\tools\<id>\<version>\` no Windows. `active` aponta
+para a versão atual, `previous` guarda o rollback e remoções recuperáveis vão
+para `.trash`. `XDG_DATA_HOME` continua tendo prioridade quando definido.
+
+Os downloads publicados devem apontar para a
+[última release disponível](https://github.com/mateuslh/lealing/releases/latest),
+nunca para uma versão numérica fixa.
+
 ## Atualização
 
 A tool **Atualizar o lealing** faz o trabalho de dentro da TUI, e o mesmo
@@ -122,7 +167,7 @@ pendente, teste quebrado ou falha de compilação interrompem a publicação.
 |---|---|
 | **Informações do Sistema** | Sistema, chip, memória, tempo ligado e bateria. Somente leitura. |
 | **Controle de Energia** | Perfis de energia da bateria e do carregador, com presets e aplicação via `pmset` (macOS) ou `powercfg` (Windows). |
-| **Uso de Tokens** | Cotas das CLIs de IA — quanto resta, em que ritmo e quando renova — mais consumo e custo por janela, modelo, projeto e dia. |
+| **Uso de Tokens** | Tool externa `screen-v1`: cotas das CLIs de IA, consumo e custo por janela, modelo, projeto e dia. |
 | **Contas do Claude Code** | Guarda as sessões de várias contas e alterna entre elas sem refazer login. |
 | **Atualizar o lealing** | Compara a versão instalada com o último release e atualiza pelo caminho por onde o lealing foi instalado. |
 | **Clone Repo Bradesco** | Descobre a família de um projeto no GitHub, clona os repositórios escolhidos e os registra no IntelliJ. |
@@ -163,9 +208,10 @@ está guardada em nenhum perfil pede confirmação, porque depois da escrita
 aquela credencial não existe mais em lugar nenhum; e **feche as sessões do
 `claude` antes de trocar** — ao sair, a CLI regrava a conta em que estava.
 
-As três primeiras vieram do [Arteus Tools](../ArteusTools) e foram reescritas
-como telas nativas da TUI. Para adicionar uma tool, veja
-**[AGENTS.md](AGENTS.md)**.
+As tools históricas vieram do [Arteus Tools](../ArteusTools). `token-usage` é
+a primeira vertical separada em runtime: a engine não importa seu domínio,
+adapters nem model. Para criar outra sem editar o bootstrap, veja
+**[AGENTS.md](AGENTS.md#11-criando-uma-tool-externa-screen-v1)**.
 
 ## Plataformas
 
@@ -213,13 +259,19 @@ lealing                                          # abre a TUI
 lealing -render 150x42                           # imprime um frame estático
 lealing -render 120x34 -keys '/token[enter]'     # já dentro de uma tool
 lealing -update                                  # atualiza e sai
+lealing -tools                                   # tools externas instaladas
+lealing -tool-install ./pacote                   # instala/atualiza localmente
+lealing -tool-rollback token-usage               # recupera versão anterior
 ```
 
 Flags: `-debug` (log em arquivo + validação estrita do catálogo),
 `-ephemeral` (não persiste favoritos), `-platforms` (matriz de suporte),
-`-update` (atualiza sem abrir a TUI), `-version`.
+`-update` (atualiza a engine sem abrir a TUI), `-tools`, `-tool-install`,
+`-tool-update`, `-tool-remove`, `-tool-rollback`, `-tool-validate` e
+`-version`.
 
-Sem instalar: `make run`, `make render SIZE=150x42 KEYS='/token'`.
+Sem instalar tools: `make run`. Para renderizar `token-usage`, rode primeiro
+`make tool-install`; depois use `make render SIZE=150x42 KEYS='/token[enter]'`.
 
 ## Atalhos
 
@@ -246,52 +298,56 @@ mudar valores é o que a tela existe para fazer.
 
 ## Arquitetura
 
-Hexagonal (ports & adapters). A regra que sustenta tudo: **a dependência
-sempre aponta para dentro**. O núcleo não importa nada de fora; a TUI chama
-portas de entrada, os casos de uso consomem portas de saída e só o bootstrap
-conhece implementações concretas.
+Hexagonal (ports & adapters) dentro da engine, com uma fronteira adicional de
+processo para tools externas. A TUI genérica chama o caso de uso de sessão; o
+caso de uso consome a porta de runtime; o adapter fala `screen-v1` com o
+executável. A engine nunca importa o pacote concreto da tool.
 
 ```
-                    ┌───────────────────────────────┐
-   driving          │            CORE               │          driven
-   adapter          │                               │          adapters
-                    │  ┌─────────────────────────┐  │
-  ┌──────────┐      │  │ portas de entrada       │  │      ┌──────────────┐
-  │   TUI    │─────▶│  │ casos de uso            │  │◀─────│   registry   │
-  │ BubbleTea│      │  │ domínio + core das tools│  │      │   search     │
-  └──────────┘      │  │ portas de saída         │◀─┼──────│ persistência │
-       │            │  └─────────────────────────┘  │      │ macos·windows│
-    screens         └───────────────────────────────┘      └──────────────┘
+┌──────────────────────────── ENGINE ─────────────────────────────┐
+│ Home/catalog ─▶ PluginScreen ─▶ InteractiveService             │
+│                                      │                          │
+│                                      ▼                          │
+│                              Runtime port                       │
+│                                      │                          │
+│                         process + JSON framing                  │
+│ topbar · breadcrumb · statusbar · ANSI sanitizer · segurança   │
+└──────────────────────────────────────┼──────────────────────────┘
+                                       │ stdin/stdout screen-v1
+┌──────────────────────────────────────▼──────────────────────────┐
+│ TOOL: SDK runtime · model · domínio · adapters · persistência   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ```
-cmd/lealing/                    binário e flags
+cmd/lealing/                    binário e flags da engine
+cmd/tools/token-usage/          executável externo da vertical inicial
+sdk/
+  protocol/                     DTOs + framing; somente biblioteca padrão
+  screen/                       adapter Bubble Tea para screen-v1
+  component/                    componentes visuais públicos
 internal/
   core/
-    domain/                     o catálogo: Tool, Query, Usage, Session
-    port/inbound/               casos de uso consumidos por driving adapters
-    port/outbound/              recursos implementados por driven adapters
-    service/                    casos de uso: CatalogService, LauncherService
-    sysinfo/ power/ tokens/     um núcleo por tool: tipos, regras e portas
-    selfupdate/                 versões, modo de instalação e o veredito da atualização
+    domain/                     catálogo, runtime declarativo e uso
+    interactive/                portas e caso de uso de sessão externa
+    toolinstall/ marketplace/   instalação, rollback e índice neutro
+    service/                    catálogo, launcher e requisitos
+    sysinfo/ power/             núcleos das tools ainda builtin
   adapter/
-    inbound/tui/                driving adapter
-      theme/                    design system: paleta, estilos, gradientes
-      component/                widgets sem estado (painel, lista, medidor…)
-      screen/home/              a homepage
-      screen/sysinfo|power|tokens/   uma tela por tool
+    inbound/tui/
+      screen/home/              home, busca e catálogo consolidado
+      screen/plugin/            tela única para todo manifest screen-v1
+      sanitize/                 recorte e allowlist ANSI
     outbound/
-      registry/                 agrega ToolProviders em um repositório
-      search/                   relevância textual fuzzy
+      externalcatalog/          descoberta lazy, somente por manifest
+      pluginprocess/            spawn, handshake, framing e shutdown
+      toolstore/                instalação local atômica e rollback
+      registry/ search/         consolidação e relevância
       persistence/              favoritos e estatísticas em JSON atômico
-      macos/                    sysctl, pmset, diálogo de administrador
-      windows/                  CIM (WMI) e powercfg
-      usage/                    leitura dos logs das CLIs de IA
-      selfupdate/               releases do GitHub, checksum e troca do binário
-  catalog/                      as tools declaradas
-  platform/                     log e caminhos XDG
+      macos/ windows/           adapters das builtins por plataforma
+  toolmanifest/                 valida lealing.dev/v1
   architecture/                testes das fronteiras de dependência
-  bootstrap/                    composition root e validação das ligações
+  bootstrap/                    único composition root
 ```
 
 ### Por que assim
@@ -304,15 +360,15 @@ internal/
   registro, não na tela.
 - **Paginação obrigatória.** `domain.Query` sempre carrega `Offset`/`Limit`.
   A TUI nunca materializa o acervo inteiro.
-- **Telas sob demanda.** `tui.Screens` mapeia tool → factory. Tools não
-  nativas caem no `Launcher`; `validateWiring` recusa, ainda no arranque,
-  builtin sem tela, factory órfã ou processo sem runner.
+- **Telas sob demanda.** Builtins continuam no mapa `tui.Screens`. Qualquer
+  item `screen-v1` abre a mesma `PluginScreen`, sem factory ou import por ID;
+  outros processos ainda usam runners tipados.
 - **Grafo acíclico.** O buscador calcula relevância textual; o serviço do
   catálogo combina frequência, recência e favoritos. Nenhum adapter recebe
   uma closure de volta para um caso de uso.
-- **Nenhuma porta é chamada em `Update` ou `View`.** Todo I/O vive em
-  `tea.Cmd`, em goroutine. É o que mantém a interface responsiva enquanto a
-  varredura de tokens percorre centenas de megabytes de log.
+- **Nenhuma porta é chamada em `Update` ou `View`.** Na engine e na tool, todo
+  I/O vive em `tea.Cmd`. Spawn, handshake, evento e espera de snapshot também
+  são comandos assíncronos.
 
 ## Testes
 
@@ -324,12 +380,12 @@ make bench    # custo de um frame de render
 make cover    # relatório de cobertura
 ```
 
-A suíte cobre as regras do domínio, o pipeline do catálogo (filtro → busca →
-ordenação → paginação), a agregação de tokens, a comparação de versões da
-atualização, os parsers do `pmset` e do CIM/`powercfg`, as fronteiras de
-dependência da arquitetura e — o mais valioso — a **geometria da TUI**: cada tela é
-renderizada em nove tamanhos, de 200×60 a 26×8, verificando que nenhuma linha
-excede o frame.
+A suíte cobre framing parcial, limite de mensagens, handshake, crash,
+cancelamento, shutdown, capabilities, manifests, descoberta sem spawn,
+instalação/rollback, sanitização ANSI, a vertical de tokens, parsers nativos e
+as fronteiras de dependência. A **geometria da TUI** renderiza as telas da
+engine e a `token-usage` em nove tamanhos, de 200×60 a 26×8, verificando que
+nenhuma linha excede o frame.
 
 Os adapters de plataforma não têm build tag: o que é específico do sistema é o
 processo que eles disparam, não o código Go. Por isso os parsers do Windows

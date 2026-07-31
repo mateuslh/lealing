@@ -16,7 +16,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	confirmationscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/confirmation"
+	pluginscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/plugin"
 	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/core/hostaction"
+	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
 )
 
@@ -37,13 +41,15 @@ var panelZones = [...]zone{zoneFavorites, zoneRecent, zoneSuggested}
 
 // Model é o estado da home.
 type Model struct {
-	deps    tui.Deps
-	catalog inbound.Catalog
-	prefs   inbound.Preferences
-	launch  inbound.Launcher
-	prereqs inbound.Prerequisites
-	now     func() time.Time
-	screens tui.Screens
+	deps        tui.Deps
+	catalog     inbound.Catalog
+	prefs       inbound.Preferences
+	launch      inbound.Launcher
+	prereqs     inbound.Prerequisites
+	now         func() time.Time
+	screens     tui.Screens
+	interactive interactive.Opener
+	hostActions hostaction.Actions
 
 	width, height int
 
@@ -114,6 +120,9 @@ type Config struct {
 	// Screens são as tools com tela própria dentro da TUI. As demais caem
 	// no Launcher.
 	Screens tui.Screens
+	// Interactive abre qualquer manifest screen-v1 pela mesma tela genérica.
+	Interactive interactive.Opener
+	HostActions hostaction.Actions
 }
 
 // New monta a home. Nada é carregado aqui — a primeira carga acontece em
@@ -130,17 +139,19 @@ func New(cfg Config) *Model {
 	}
 
 	return &Model{
-		deps:    cfg.Deps,
-		catalog: cfg.Catalog,
-		prefs:   cfg.Prefs,
-		launch:  cfg.Launcher,
-		prereqs: cfg.Prerequisites,
-		now:     now,
-		screens: cfg.Screens,
-		input:   in,
-		catByID: map[domain.CategoryID]domain.Category{},
-		loading: true,
-		user:    fallbackUser(cfg.User),
+		deps:        cfg.Deps,
+		catalog:     cfg.Catalog,
+		prefs:       cfg.Prefs,
+		launch:      cfg.Launcher,
+		prereqs:     cfg.Prerequisites,
+		now:         now,
+		screens:     cfg.Screens,
+		interactive: cfg.Interactive,
+		hostActions: cfg.HostActions,
+		input:       in,
+		catByID:     map[domain.CategoryID]domain.Category{},
+		loading:     true,
+		user:        fallbackUser(cfg.User),
 		// Abre com o foco em "sugeridas": é o único painel garantidamente
 		// preenchido na primeira execução, e focar a sidebar de saída
 		// esmaeceria o espectro inteiro menos uma categoria.
@@ -322,7 +333,14 @@ func (m *Model) openTool(t domain.Tool) tea.Cmd {
 	if len(t.Requirements) > 0 {
 		return m.checkRequirements(t)
 	}
-	return m.openReady(t)
+	return m.confirmOrOpen(t)
+}
+
+func (m *Model) confirmOrOpen(t domain.Tool) tea.Cmd {
+	if t.Risk.NeedsConfirmation() {
+		return tui.Navigate(confirmationscreen.New(m.deps, t, func() tea.Cmd { return m.openReady(t, true) }))
+	}
+	return m.openReady(t, false)
 }
 
 // checkRequirements consulta o PATH fora de Update. O executável pode estar
@@ -344,12 +362,16 @@ func (m *Model) checkRequirements(t domain.Tool) tea.Cmd {
 }
 
 // openReady inicia uma tool cujos pré-requisitos já foram satisfeitos.
-func (m *Model) openReady(t domain.Tool) tea.Cmd {
+func (m *Model) openReady(t domain.Tool, confirmed bool) tea.Cmd {
 	if screen, ok := m.screens.Open(t.ID); ok {
 		// Abrir conta como uso: é o que alimenta "recentes" e as sugestões.
 		return tea.Batch(tui.Navigate(screen), m.recordOpen(t.ID))
 	}
-	return m.launchTool(t)
+	if t.Interactive() {
+		screen := pluginscreen.New(m.deps, m.interactive, m.hostActions, t)
+		return tea.Batch(tui.Navigate(screen), m.recordOpen(t.ID))
+	}
+	return m.launchTool(t, confirmed)
 }
 
 // recordOpen contabiliza a abertura de uma tool com tela própria.
@@ -376,7 +398,7 @@ func (m *Model) recordOpen(id domain.ToolID) tea.Cmd {
 }
 
 // launchTool inicia a execução da tool selecionada.
-func (m *Model) launchTool(t domain.Tool) tea.Cmd {
+func (m *Model) launchTool(t domain.Tool, confirmed bool) tea.Cmd {
 	launcher := m.launch
 	if launcher == nil {
 		return func() tea.Msg {
@@ -386,9 +408,7 @@ func (m *Model) launchTool(t domain.Tool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		// Confirmed vem falso de propósito: tools destrutivas devem devolver
-		// ErrConfirmationRequired e abrir o diálogo, não executar direto.
-		_, err := launcher.Launch(ctx, t.ID, nil, inbound.LaunchOptions{})
+		_, err := launcher.Launch(ctx, t.ID, nil, inbound.LaunchOptions{Confirmed: confirmed})
 		return launchedMsg{tool: t.ID, err: err}
 	}
 }

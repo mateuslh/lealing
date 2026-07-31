@@ -72,19 +72,6 @@ func (Builtin) Provide(context.Context) ([]domain.Tool, []domain.Category, error
 			Keywords:  []string{"sysctl", "wmi", "hardware", "cpu", "memória", "uptime", "bateria", "macos", "windows"},
 		},
 		{
-			// Sem Platforms: as CLIs de IA escrevem os mesmos JSONL em
-			// qualquer sistema, e a tool só lê arquivo.
-			ID:       "token-usage",
-			Name:     "Uso de Tokens",
-			Summary:  "Consumo de tokens e custo estimado, somando todas as sessões, por modelo, dia e projeto.",
-			Detail:   "Varre ~/.claude/projects e ~/.codex/sessions, normaliza o consumo relatado por cada CLI e estima o custo pela tabela de preços. Os preços da OpenAI são estimativas.",
-			Category: AI.ID,
-			Kind:     domain.KindBuiltin,
-			Risk:     domain.RiskSafe,
-			Glyph:    "◔",
-			Keywords: []string{"claude", "codex", "custo", "tokens", "gasto", "usage", "preço"},
-		},
-		{
 			// Sem Platforms: o cofre muda de sistema para sistema — chaveiro
 			// no macOS, arquivo no Windows e no Linux —, mas isso é escolha
 			// do adapter, e a tool funciona nos três.
@@ -193,4 +180,19 @@ func devkitTools() []domain.Tool {
 // outbound.ToolProvider.
 func Providers() []outbound.ToolProvider {
 	return []outbound.ToolProvider{Builtin{}}
+}
+
+// Categories devolve uma cópia das categorias aceitas por manifests externos.
+func Categories() []domain.Category {
+	return append([]domain.Category(nil), categories...)
+}
+
+// ReservedIDs são os IDs que uma instalação externa nunca pode sombrear.
+func ReservedIDs() []domain.ToolID {
+	tools, _, _ := (Builtin{}).Provide(context.Background())
+	ids := make([]domain.ToolID, len(tools))
+	for i, tool := range tools {
+		ids[i] = tool.ID
+	}
+	return ids
 }

@@ -75,13 +75,17 @@ caso de uso fino é preferível a ligar TUI diretamente a disco ou processo.
 | Tipo | Quando | `Kind` | O que você escreve |
 |---|---|---|---|
 | **Nativa** | A tool tem interface própria dentro da TUI | `KindBuiltin` | Core + caso de uso + adapter de saída + tela + composição |
+| **Externa screen-v1** | É uma tool instalável com conteúdo TUI rico | `KindProcess` + `ui.mode: screen-v1` | Executável + manifest + SDK; nenhuma edição no bootstrap |
 | **Processo** | A tool é um binário externo | `KindProcess` | Catálogo + runner/resolver tipado + composição |
 | **Script** | A tool é um script interpretado | `KindScript` | Catálogo + runner/resolver tipado + composição |
 | **Remota** | A tool fala com um serviço | `KindRemote` | Core + cliente de saída + caso de uso + runner ou tela |
 
-As tools atuais são nativas. Para uma leitura mínima, comece por
-`system-info`; para ver política e suporte parcial, leia `power`; para
-orquestração com vários recursos externos, leia `repoclone`.
+As tools históricas ainda são nativas. `token-usage` é a vertical de
+referência para uma tool externa: domínio, adapters e tela vivem em
+`cmd/tools/token-usage`, e a engine conhece apenas seu manifest e o protocolo.
+Para uma nativa mínima, comece por `system-info`; para ver política e suporte
+parcial, leia `power`; para orquestração com vários recursos externos, leia
+`repoclone`.
 
 ---
 
@@ -605,15 +609,207 @@ Regras para agentes:
 | Caso de uso que orquestra portas | `internal/core/service/` |
 | Tela mínima, do zero | `screen/sysinfo/sysinfo.go` |
 | Tela com edição e confirmação | `screen/power/` |
-| Tela com dados agregados e gráficos | `screen/tokens/` |
+| Vertical externa com gráficos e abas | `cmd/tools/token-usage/` |
+| Contrato serializável | `sdk/protocol/` |
+| Runtime Go de uma tool | `sdk/screen/` |
+| Tela genérica da engine | `screen/plugin/` |
+| Processo e handshake | `outbound/pluginprocess/` |
+| Manifest e descoberta | `internal/toolmanifest/` · `outbound/externalcatalog/` |
 | Parser testável isolado do sistema | `macos/power.go` + `macos/power_test.go` |
 | Adapter de uma segunda plataforma | `windows/power.go` + `windows/power_test.go` |
 | Porta com suporte parcial | `core/power/fields.go` (`Feature`, `Merge`) |
 | Escolha do adapter por sistema | `internal/bootstrap/platform.go` |
 | Validação catálogo ↔ tela ↔ runner | `internal/bootstrap/wiring.go` |
 | Matriz de suporte do acervo | `internal/bootstrap/matrix.go` · `lealing -platforms` |
-| Agregação e erro parcial | `core/tokens/tokens.go` |
+| Agregação e erro parcial externa | `cmd/tools/token-usage/internal/tokens/` |
 | Como tudo se conecta | `internal/bootstrap/bootstrap.go` |
+
+## 11. Criando uma tool externa `screen-v1`
+
+Este é o caminho padrão para uma tool nova que tenha interface própria. Uma
+tool externa é instalada e atualizada sem recompilar a engine, mas continua
+dentro do chrome dela. A engine nunca importa seu domínio, adapters ou model;
+ela descobre o manifest e abre `screen/plugin` para qualquer ID. **Adicionar
+uma externa não altera `internal/bootstrap` nem cria factory por ID.**
+
+### 11.1 Quando usar externa e quando usar builtin
+
+Use `screen-v1` para tabelas, filtros, ordenação, gráficos, abas, modais,
+campos, autocomplete, seleção múltipla, scroll, progresso, mouse e operações
+assíncronas. O model pode usar Bubble Tea e Bubbles por meio de `sdk/screen`.
+Use builtin só para capacidades que pertencem à própria engine: home,
+marketplace, instalador/rollback, requisitos, atualização da engine, chrome e
+diagnóstico do runtime. Interfaces que tomam o terminal inteiro — SSH, Vim,
+ncurses arbitrário, PTY de debugger — não cabem em `screen-v1`.
+
+### 11.2 Estrutura e imports
+
+Enquanto as oficiais estão neste monorepo:
+
+```text
+cmd/tools/minha-tool/
+  main.go
+  manifest.yaml
+  internal/
+    domain/
+    adapter/
+    ui/
+```
+
+O executável pode importar `github.com/mateuslh/lealing/sdk/protocol`,
+`sdk/screen` e `sdk/component`. Nunca importe `github.com/mateuslh/lealing/internal`.
+Depois da extração, a mesma árvore entra em `lealing-tools` sem mudar a
+engine. Um executável por tool é o contrato da v1.
+
+### 11.3 Manifest
+
+Comece por `cmd/tools/token-usage/manifest.yaml` e valide sem iniciar o
+binário:
+
+```sh
+go run ./cmd/lealing -tool-validate ./cmd/tools/minha-tool/manifest.yaml
+```
+
+O `apiVersion` é `lealing.dev/v1`; `runtime.kind` é `process`; o intervalo de
+`runtime.protocol` precisa ser não vazio; `ui.mode` é `screen-v1`; e
+`runtime.executable` é um nome simples, sem diretório, argumento ou shell. No
+Windows o instalador acrescenta `.exe` ao nome do artefato. `summary` tem uma
+linha e termina em ponto. ID, categoria, risk, SemVer, plataforma, requisitos,
+capabilities e permissões são validados antes de a instalação ser ativada.
+
+O ID é permanente. Favoritos e histórico continuam usando o mesmo `ToolID`
+mesmo quando a implementação muda de repositório. Nunca publique uma nova
+versão para corrigir um ID: isso cria outra tool.
+
+### 11.4 Model e SDK
+
+Implemente `screen.Model`:
+
+```go
+type Model interface {
+    Init() tea.Cmd
+    Update(tea.Msg) (screen.Model, tea.Cmd)
+    View(protocol.Frame) string
+}
+```
+
+Implemente opcionalmente `screen.Hinter`, `screen.Statuser`,
+`screen.Capturer` e `screen.CursorProvider`. `sdk/component` contém tema,
+painel, meter, barras, sparkline, alinhamento, truncamento e centralização.
+Componentes Bubble Tea/Bubbles continuam disponíveis dentro do processo da
+tool; a fronteira entre processos permanece formada apenas pelos DTOs JSON de
+`sdk/protocol`.
+
+O `main` reserva stdin/stdout para `screen.Run` e cria o model na `Factory`.
+Use `screen.Session.Initialize` para frame, tema, plataforma, arquitetura,
+diretórios, capabilities e permissões negociadas. Logs vão para stderr.
+
+### 11.5 I/O assíncrono e progresso
+
+`Update` e `View` continuam funções de estado/render. Arquivo, HTTP, processo,
+cache e relógios lentos só rodam dentro de `tea.Cmd`, sempre com
+`context.Context` e timeout. O comando devolve uma mensagem para `Update`,
+que altera o estado; cada alteração gera um snapshot completo. Progresso é
+uma sequência de mensagens do model, não RPC por célula. A v1 deliberadamente
+não tem diff de frame.
+
+Para ações do host, use `screen.Request` e declare a capability correspondente
+no manifest: `navigation.back`, `notification.show`, `clipboard.write`,
+`confirmation.request` ou `browser.open`. A engine rejeita requests não
+negociadas. Confirmações destrutivas e o modal de `confirmation.request` são
+da engine, nunca da tool.
+
+### 11.6 Plataformas, requisitos e permissões
+
+Declare cada artefato como `darwin-amd64`, `darwin-arm64`, `windows-amd64` ou
+`windows-arm64`. Não detecte o sistema para escolher código da engine; dentro
+da tool, prefira a plataforma recebida no handshake e injete a escolha nos
+adapters. Um requisito de PATH usa somente `executable`, `name` e
+`installHint`, sem argumentos.
+
+Permissões são mínimas e explícitas:
+
+```yaml
+permissions:
+  filesystem:
+    read: [~/.minha-tool/dados]
+    write: []
+  network: false
+  subprocess: false
+```
+
+Declare o que o binário realmente usa. A v1 transmite e apresenta essas
+concessões, mas não promete sandbox de sistema operacional; uma tool maliciosa
+ainda herda as permissões do usuário. Isso torna publicador, checksum e revisão
+do artefato partes da fronteira de confiança.
+
+### 11.7 ANSI, stdout e stderr
+
+O `Body` pode conter Unicode, quebras de linha e somente SGR de cor, bold,
+italic, underline e reset. OSC, clipboard, título, clear, cursor global,
+alt-screen, mudança de modo e sequências desconhecidas são removidos pela
+engine. Hints, status e texto de modal perdem todo ANSI. Teste payloads hostis,
+não apenas layout feliz.
+
+`stdout` pertence exclusivamente a `Content-Length: ...\r\n\r\n<json>`.
+Um `fmt.Println` em stdout corrompe a sessão. Use stderr para logs; a engine o
+captura no arquivo estruturado. Nunca use shell para iniciar subprocessos ou
+interpolar entrada do usuário em uma linha de comando.
+
+### 11.8 Testes e incompatibilidade
+
+No mínimo, cubra domínio, adapters/parsers, model, as nove geometrias, estado
+vazio/erro, tabs/scroll/capturing e o executável com o teste de conformidade do
+protocolo. Renderize a vertical em 150×42 e 60×20. Para incompatibilidade,
+teste um intervalo da tool sem interseção com o da engine; a mensagem precisa
+mostrar os dois intervalos e nenhum processo deve ser iniciado quando o
+manifest já prova a incompatibilidade.
+
+Use helpers Go herméticos para testes de processo. Não dependa de shell, rede,
+home real ou sleeps exatos. Pacotes com goroutines, pipes ou canais rodam com
+`go test -race`.
+
+### 11.9 Build, instalação local e rollback
+
+Para a vertical oficial de referência:
+
+```sh
+make tool-build
+make tool-install
+lealing -tools
+lealing -tool-rollback token-usage
+lealing -tool-remove token-usage
+```
+
+Para outra tool, produza um diretório com `manifest.yaml` e o executável e
+rode `lealing -tool-install DIRETORIO`. Instalar uma versão mais nova (ou
+`-tool-update DIRETORIO`) preserva a ativa anterior. A troca de `active` é
+atômica; rollback revalida manifest, plataforma e binário antes de apontar
+para a versão anterior. Remoção move a instalação para `.trash` e informa o
+caminho recuperável.
+
+Gere os quatro artefatos oficiais com `CGO_ENABLED=0`; o workflow
+`.github/workflows/tools.yml` executa fmt, vet, test, race, conformidade,
+cross-build, pacote por alvo e `checksums.txt`. Cada pacote contém seu manifest.
+
+### 11.10 Marketplace e versionamento
+
+O índice usa o modelo de `internal/core/marketplace`: ID, versão, publicador,
+URL do manifest, artefatos por alvo, SHA-256, intervalo do protocolo, versão
+mínima da engine e canal `official`, `verified` ou `community`. O seletor pega
+a versão mais nova compatível; nunca fixe a engine a uma versão numérica da
+tool.
+
+Versione tool e protocolo separadamente. Mudança compatível incrementa a tool;
+mudança de fio aditiva mantém o intervalo; quebra de contrato cria outra
+versão do protocolo e preserva negociação com versões antigas quando possível.
+O catálogo HTTP fica para a fase após a extração. Até lá, instalação por
+arquivo/local é o caminho suportado e não depende de GitHub.
+
+Para extrair as oficiais, mova `cmd/tools/token-usage` e depois as outras
+verticais para `github.com/mateuslh/lealing-tools`, conserve os IDs e importe
+apenas o SDK público. Mova também o workflow de tools e conecte o último job à
+release do novo repositório. Não crie o remoto, tag ou release sem autorização.
 
 Antes de concluir, responda “sim” a todas:
 
@@ -625,4 +821,8 @@ Antes de concluir, responda “sim” a todas:
 - toda escolha de plataforma está em `bootstrap/platform.go`?
 - catálogo, factory e runner usam o mesmo ID e `Kind`?
 - parser, core, caso de uso, tela e geometria têm testes proporcionais?
+- uma externa importa somente `sdk/` e seu próprio código, nunca `internal/`?
+- a engine não tem import, factory nem composição concreta da externa?
+- descoberta lê apenas manifests e o spawn acontece só ao abrir a tela?
+- stdout da externa contém só protocolo e todo texto não-Body foi sanitizado?
 - `fmt`, `vet`, `test`, `cross` e os dois renders passaram?

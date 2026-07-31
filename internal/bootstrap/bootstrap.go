@@ -23,13 +23,14 @@ import (
 	powerscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
-	tokensscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/tokens"
 	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/claudecli"
 	devkitadapter "github.com/mateuslh/lealing/internal/adapter/outbound/devkit"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/externalcatalog"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/persistence"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/pluginprocess"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/search"
@@ -37,10 +38,12 @@ import (
 	"github.com/mateuslh/lealing/internal/core/ccaccount"
 	"github.com/mateuslh/lealing/internal/core/devkit"
 	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/core/hostaction"
+	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
-	coretokens "github.com/mateuslh/lealing/internal/core/tokens"
 	"github.com/mateuslh/lealing/internal/platform/logging"
+	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 // Options são as escolhas que o binário oferece na linha de comando.
@@ -80,8 +83,13 @@ func Wire(opts Options) (*App, error) {
 
 	// --- Infraestrutura ---
 	log := outbound.Logger(logging.NewDiscard())
-	if opts.Debug {
-		level := slog.LevelDebug
+	if !opts.Ephemeral {
+		level := slog.LevelInfo
+		if opts.Debug {
+			level = slog.LevelDebug
+		}
+		// Mesmo fora do debug, manifests corrompidos e stderr de tools precisam
+		// de um destino persistente que não seja stdout (que pertence à TUI).
 		fileLog, err := logging.NewFile(filepath.Join(directories.State, "lealing.log"), level)
 		if err != nil {
 			return nil, err
@@ -94,7 +102,16 @@ func Wire(opts Options) (*App, error) {
 	// O catálogo é o mesmo em toda plataforma; o filtro é que decide o que
 	// esta máquina enxerga. Manter a declaração única evita que a lista de
 	// tools se bifurque por sistema operacional.
-	repo := registry.New(catalog.Providers(),
+	providers := catalog.Providers()
+	providers = append(providers, externalcatalog.New(externalcatalog.Options{
+		Root:       directories.Tools,
+		Categories: catalog.Categories(),
+		Reserved:   catalog.ReservedIDs(),
+		Target:     currentToolTarget(),
+		Strict:     opts.Debug,
+		Logger:     log,
+	}))
+	repo := registry.New(providers,
 		registry.WithLogger(log),
 		registry.WithStrict(opts.Debug),
 		registry.WithPlatform(platform),
@@ -112,6 +129,11 @@ func Wire(opts Options) (*App, error) {
 	}
 
 	clock := outbound.SystemClock
+	processRuntime := pluginprocess.New(pluginprocess.Config{
+		Protocol: protocol.VersionRange{Min: protocol.Version1, Max: protocol.Version1},
+		Logger:   log,
+	})
+	app.closers = append(app.closers, processRuntime.Close)
 
 	// --- Core ---
 	// O Searcher cuida apenas da relevância textual; o serviço combina uso,
@@ -134,7 +156,27 @@ func Wire(opts Options) (*App, error) {
 		return nil, err
 	}
 	native := adaptersFor(platform, clock.Now, userHome)
-	usageService := coretokens.NewService(clock.Now, tokenProvidersFor(platform, userHome)...)
+	capabilities := []string{
+		interactive.CapabilityNavigationBack,
+		interactive.CapabilityNotificationShow,
+		interactive.CapabilityConfirmationRequest,
+	}
+	if native.host != nil {
+		capabilities = append(capabilities,
+			interactive.CapabilityClipboardWrite,
+			interactive.CapabilityBrowserOpen,
+		)
+	}
+	interactiveTools := interactive.NewService(repo, processRuntime, interactive.ServiceConfig{
+		EngineVersion: opts.Version,
+		Platform:      currentToolTarget().OS,
+		Architecture:  currentToolTarget().Arch,
+		DataRoot:      filepath.Join(directories.Data, "tool-data"),
+		CacheRoot:     filepath.Join(directories.Cache, "tools"),
+		UserHome:      userHome,
+		Capabilities:  capabilities,
+	})
+	hostActions := hostaction.NewService(native.host)
 	gitScanner := gitinsight.New(filepath.Join(userHome, "dev"), clock.Now)
 	engineeringRunner := devkitadapter.New()
 
@@ -151,12 +193,10 @@ func Wire(opts Options) (*App, error) {
 		clock.Now,
 	)
 
-	// As tools de tokens e de contas leem o que as CLIs escrevem igual em
-	// qualquer sistema, então não passam por nativeAdapters. As outras duas só
-	// entram se a plataforma tiver quem as atenda — sem isso, a tool abriria
-	// uma tela com um adapter nil.
+	// As tools nativas abaixo continuam ligadas individualmente. Tools
+	// screen-v1 são reconhecidas pelo runtime do item do catálogo e abertas
+	// pela factory genérica da home, sem uma entrada por ID neste mapa.
 	screens := tui.Screens{
-		"token-usage":     func() tui.Screen { return tokensscreen.New(deps, usageService, clock.Now) },
 		"claude-accounts": func() tui.Screen { return accountsscreen.New(deps, accounts, clock.Now) },
 		"self-update": func() tui.Screen {
 			return updatescreen.New(deps, Updater(opts.Version), userHome, clock.Now)
@@ -196,6 +236,8 @@ func Wire(opts Options) (*App, error) {
 		Now:           clock.Now,
 		User:          userNameFor(platform),
 		Screens:       screens,
+		Interactive:   interactiveTools,
+		HostActions:   hostActions,
 	})
 
 	app.ui = tui.NewApp(th, root)

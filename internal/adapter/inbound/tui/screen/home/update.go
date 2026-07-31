@@ -143,7 +143,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 		if len(msg.missing) > 0 {
 			return m, tui.Navigate(requirementsscreen.New(m.deps, msg.tool, msg.missing))
 		}
-		return m, m.openReady(msg.tool)
+		return m, m.confirmOrOpen(msg.tool)
 
 	case tickMsg:
 		if m.toast.text != "" && m.now().Sub(m.toast.at) > toastTTL {

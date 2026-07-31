@@ -18,24 +18,25 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/ccaccount"
+	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/confirmation"
 	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
+	pluginscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/plugin"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
-	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/tokens"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	coreaccount "github.com/mateuslh/lealing/internal/core/ccaccount"
 	coredevkit "github.com/mateuslh/lealing/internal/core/devkit"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coregitinsight "github.com/mateuslh/lealing/internal/core/gitinsight"
+	"github.com/mateuslh/lealing/internal/core/interactive"
 	corepower "github.com/mateuslh/lealing/internal/core/power"
 	corerepoclone "github.com/mateuslh/lealing/internal/core/repoclone"
 	coreselfupdate "github.com/mateuslh/lealing/internal/core/selfupdate"
 	coresysinfo "github.com/mateuslh/lealing/internal/core/sysinfo"
-	coretokens "github.com/mateuslh/lealing/internal/core/tokens"
 )
 
 var frames = []tui.Frame{
@@ -118,11 +119,18 @@ func (f fakeUpdater) Apply(context.Context, coreselfupdate.Status) (coreselfupda
 	return coreselfupdate.Outcome{To: f.status.Latest.Tag, Restart: true}, nil
 }
 
-type fakeGenerator struct{ report coretokens.Report }
+type fakeInteractiveOpener struct{ session interactive.Session }
 
-func (f fakeGenerator) Generate(context.Context) (coretokens.Report, error) {
-	return f.report, nil
+func (f fakeInteractiveOpener) Open(context.Context, domain.ToolID, interactive.OpenOptions) (interactive.Session, error) {
+	return f.session, nil
 }
+
+type fakeInteractiveSession struct{ updates chan interactive.Update }
+
+func (f *fakeInteractiveSession) Updates() <-chan interactive.Update                      { return f.updates }
+func (f *fakeInteractiveSession) Send(context.Context, interactive.Event) error           { return nil }
+func (f *fakeInteractiveSession) Respond(context.Context, interactive.HostResponse) error { return nil }
+func (f *fakeInteractiveSession) Shutdown(context.Context) error                          { return nil }
 
 type fakeDevkitRunner struct{}
 
@@ -241,68 +249,6 @@ func updateFixture() coreselfupdate.Status {
 				"A busca agora considera as palavras-chave declaradas no catálogo.",
 		},
 		State: coreselfupdate.StateOutdated,
-	}
-}
-
-func tokensFixture() coretokens.Report {
-	totals := coretokens.Totals{Input: 1_000_000, Output: 500_000, Messages: 3393, Cost: 330.68}
-	slice := func(label string, cost float64) coretokens.Slice {
-		return coretokens.Slice{Label: label, Totals: coretokens.Totals{Cost: cost, Messages: 10}}
-	}
-
-	days := make([]coretokens.DayPoint, 0, 30)
-	base := fixedNow().AddDate(0, 0, -29)
-	for i := range 30 {
-		d := base.AddDate(0, 0, i)
-		days = append(days, coretokens.DayPoint{
-			Date: d, Day: d.Format(time.DateOnly),
-			Totals: coretokens.Totals{Cost: float64(i) * 3.7},
-		})
-	}
-
-	return coretokens.Report{
-		Overall: totals,
-		ByProvider: []coretokens.Slice{
-			slice("Claude Code", 328.81), slice("Codex", 1.87),
-		},
-		ByModel: []coretokens.Slice{
-			slice("claude-sonnet-5", 184.52), slice("claude-opus-4-8", 91.21),
-			slice("claude-opus-5", 52.57), slice("gpt-5.5", 1.39),
-		},
-		ByProject: []coretokens.Slice{
-			slice("leanling", 120), slice("um-nome-de-projeto-absurdamente-longo", 80),
-		},
-		ByDay:     days,
-		Providers: []string{"Claude Code", "Codex"},
-		Windows: []coretokens.WindowUsage{
-			{Label: "Últimas 5h", Totals: coretokens.Totals{Cost: 48.62},
-				ByProvider: []coretokens.Slice{slice("Claude Code", 48.62)}},
-			{Label: "Hoje", Totals: coretokens.Totals{Cost: 52.57},
-				ByProvider: []coretokens.Slice{slice("Claude Code", 52.57)}},
-			{Label: "7 dias", Totals: coretokens.Totals{Cost: 144.26},
-				ByProvider: []coretokens.Slice{slice("Claude Code", 143.1), slice("Codex", 1.16)}},
-			{Label: "Este mês", Totals: coretokens.Totals{Cost: 329.53}},
-		},
-		// Cotas consultadas na conta (Claude Code) e lidas do log (Codex), que
-		// é o par de origens que o painel de limites precisa distinguir.
-		RateWindows: []coretokens.RateWindow{
-			{Provider: "Claude Code", Label: "Sessão 5h", UsedPercent: 53, WindowMinutes: 300,
-				ResetsAt: fixedNow().Add(90 * time.Minute), ObservedAt: fixedNow(), Source: "conta"},
-			{Provider: "Claude Code", Label: "Semana", UsedPercent: 31, WindowMinutes: 10080,
-				ResetsAt: fixedNow().AddDate(0, 0, 2), ObservedAt: fixedNow(), Source: "conta"},
-			{Provider: "Codex", Label: "Semana", UsedPercent: 1, WindowMinutes: 10080,
-				ResetsAt: fixedNow().AddDate(0, 0, 4), ObservedAt: fixedNow().Add(-10 * time.Minute),
-				Source: "log local"},
-			{Provider: "Codex", Label: "Sessão 5h", UsedPercent: 94, WindowMinutes: 300,
-				ResetsAt: fixedNow().Add(2 * time.Hour), ObservedAt: fixedNow().Add(-10 * time.Minute),
-				Source: "log local"},
-		},
-		// Um saldo com teto (barra) e uma carteira sem teto (só o valor):
-		// as duas formas que as CLIs usam para contar crédito.
-		Credits: []coretokens.Credits{
-			{Provider: "Claude Code", Used: 83.89, Limit: 275, Currency: "BRL", Enabled: true},
-			{Provider: "Codex", Balance: 12.5, Enabled: true},
-		},
 	}
 }
 
@@ -434,11 +380,19 @@ var cases = append([]screenCase{
 		keys: []string{"down", "right", "tab", "2"},
 	},
 	{
-		name: "tokens",
+		name:  "plugin screen-v1",
+		build: pluginScreenFixture,
+		keys:  []string{"tab", "down"},
+	},
+	{
+		name: "confirmação global",
 		build: func(t *testing.T) tui.Screen {
-			return settle(t, tokens.New(deps(), fakeGenerator{report: tokensFixture()}, fixedNow))
+			return confirmation.New(deps(), domain.Tool{
+				ID: "external-danger", Name: "Tool externa destrutiva",
+				Detail: "Altera um ambiente externo e exige confirmação da engine antes do spawn.",
+				Risk:   domain.RiskDestructive,
+			}, nil)
 		},
-		keys: []string{"tab", "down", "down"},
 	},
 	{
 		name: "atualizar",
@@ -469,12 +423,6 @@ var cases = append([]screenCase{
 		build: func(t *testing.T) tui.Screen {
 			err := errors.New("Get \"https://api.github.com/repos/mateuslh/lealing/releases/latest\": dial tcp: lookup api.github.com: no such host")
 			return settle(t, update.New(deps(), fakeUpdater{err: err}, "", fixedNow))
-		},
-	},
-	{
-		name: "tokens vazio",
-		build: func(t *testing.T) tui.Screen {
-			return settle(t, tokens.New(deps(), fakeGenerator{}, fixedNow))
 		},
 	},
 	{
@@ -616,6 +564,42 @@ func devkitScreenCases() []screenCase {
 		})
 	}
 	return out
+}
+
+func pluginScreenFixture(t *testing.T) tui.Screen {
+	t.Helper()
+	updates := make(chan interactive.Update, 1)
+	updates <- interactive.Update{
+		State: interactive.StateRunning,
+		Snapshot: &interactive.Snapshot{
+			Sequence: 1,
+			Body: "\x1b[1;36mTOOL EXTERNA\x1b[0m\n" +
+				strings.Repeat("linha extensa do conteúdo central · ", 8) + "\n" +
+				strings.Repeat("gráfico ▂▃▄▅▆▇█ ", 24),
+			Hints:  []interactive.Hint{{Key: "tab", Label: "trocar aba"}, {Key: "esc", Label: "voltar"}},
+			Status: "screen-v1 conectado",
+		},
+	}
+	session := &fakeInteractiveSession{updates: updates}
+	tool := domain.Tool{
+		ID: "external-fixture", Name: "Tool externa", Kind: domain.KindProcess,
+		Runtime: &domain.ExternalRuntime{UIMode: "screen-v1"},
+	}
+	screen := tui.Screen(pluginscreen.New(deps(), fakeInteractiveOpener{session: session}, nil, tool))
+	opened := screen.Init()()
+	screen, command := screen.Update(opened)
+	if command == nil {
+		t.Fatal("abertura screen-v1 não iniciou espera do snapshot")
+	}
+	message := command()
+	if batch, ok := message.(tea.BatchMsg); ok {
+		if len(batch) == 0 {
+			t.Fatal("abertura produziu lote vazio")
+		}
+		message = batch[0]()
+	}
+	screen, _ = screen.Update(message)
+	return screen
 }
 
 func cloneRepoPreview(t *testing.T) tui.Screen {

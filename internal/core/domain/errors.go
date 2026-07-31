@@ -76,6 +76,12 @@ func (t Tool) Validate() error {
 		return &ValidationError{ID: t.ID, Field: "Risk", Reason: "é desconhecido"}
 	case !t.Platforms.Valid():
 		return &ValidationError{ID: t.ID, Field: "Platforms", Reason: "tem bit desconhecido"}
+	case t.Runtime != nil && t.Kind != KindProcess:
+		return &ValidationError{ID: t.ID, Field: "Runtime", Reason: "exige kind process"}
+	case t.Runtime != nil && t.Runtime.Executable == "":
+		return &ValidationError{ID: t.ID, Field: "Runtime.Executable", Reason: "é obrigatório"}
+	case t.Runtime != nil && (t.Runtime.ProtocolMin <= 0 || t.Runtime.ProtocolMax < t.Runtime.ProtocolMin):
+		return &ValidationError{ID: t.ID, Field: "Runtime.Protocol", Reason: "é inválido"}
 	}
 	seenRequirements := make(map[string]bool, len(t.Requirements))
 	for _, requirement := range t.Requirements {

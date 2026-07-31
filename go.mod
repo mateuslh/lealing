@@ -10,6 +10,7 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0
 	github.com/muesli/reflow v0.3.0
 	github.com/sahilm/fuzzy v0.1.3
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

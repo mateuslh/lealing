@@ -150,8 +150,8 @@ func TestCatalogoEmbutidoValida(t *testing.T) {
 
 	// Toda tool declarada precisa ter uma tela ou um runner; a contagem
 	// aqui trava o acervo contra remoção acidental.
-	if m.highlights.TotalTools != 15 {
-		t.Errorf("tools = %d, quero 15", m.highlights.TotalTools)
+	if m.highlights.TotalTools != 14 {
+		t.Errorf("tools = %d, quero 14", m.highlights.TotalTools)
 	}
 	if m.highlights.TotalCategories != 5 {
 		t.Errorf("categorias povoadas = %d, quero 5", m.highlights.TotalCategories)
@@ -190,16 +190,16 @@ func TestBuscaAceitaFiltroInline(t *testing.T) {
 	m, _ = press(t, m, "/")
 	m = typeText(t, m, "cat:ai")
 
-	// A categoria de IA tem o uso de tokens e a troca de contas; o filtro
-	// precisa trazer as duas e nada de outra categoria.
-	if m.results.Total != 2 {
-		t.Fatalf("filtro cat:ai devolveu %d, quero 2", m.results.Total)
+	// Sem instalações externas no fixture, a categoria de IA contém apenas
+	// a troca de contas. A token-usage entra por outro provider em runtime.
+	if m.results.Total != 1 {
+		t.Fatalf("filtro cat:ai devolveu %d, quero 1", m.results.Total)
 	}
 	got := map[string]bool{}
 	for _, item := range m.results.Items {
 		got[string(item.Tool.ID)] = true
 	}
-	for _, want := range []string{"token-usage", "claude-accounts"} {
+	for _, want := range []string{"claude-accounts"} {
 		if !got[want] {
 			t.Errorf("cat:ai não trouxe %s (veio %v)", want, got)
 		}

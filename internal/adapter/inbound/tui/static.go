@@ -11,7 +11,7 @@ import (
 // perCmdTimeout é quanto esperamos por um comando antes de desistir dele.
 // Blink de cursor e tickers nunca respondem a tempo, e um frame estático não
 // tem para onde evoluir com eles.
-const perCmdTimeout = 250 * time.Millisecond
+const perCmdTimeout = 750 * time.Millisecond
 
 // RenderStatic desenha um único frame fora do loop do Bubble Tea.
 //

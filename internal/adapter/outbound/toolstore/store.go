@@ -1,0 +1,311 @@
+// Package toolstore instala tools em diretórios versionados sem executá-las.
+package toolstore
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/toolmanifest"
+)
+
+type Store struct {
+	root       string
+	categories map[domain.CategoryID]bool
+	target     toolmanifest.Target
+	now        func() time.Time
+}
+
+var _ toolinstall.Store = (*Store)(nil)
+
+func New(root string, categories []domain.Category, target toolmanifest.Target, now func() time.Time) *Store {
+	known := make(map[domain.CategoryID]bool, len(categories))
+	for _, category := range categories {
+		known[category.ID] = true
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &Store{root: root, categories: known, target: target, now: now}
+}
+
+func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest) (_ toolinstall.Installation, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	raw, err := os.ReadFile(filepath.Join(request.SourceDir, "manifest.yaml"))
+	if err != nil {
+		return toolinstall.Installation{}, fmt.Errorf("ler manifest local: %w", err)
+	}
+	manifest, err := toolmanifest.ParseAndValidate(raw, toolmanifest.ValidationOptions{Categories: s.categories, Target: s.target})
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if !manifest.Supports(s.target) {
+		return toolinstall.Installation{}, fmt.Errorf("tool %s não publica artefato para %s-%s", manifest.ID, s.target.OS, s.target.Arch)
+	}
+
+	executableName := manifest.ExecutableName(s.target)
+	sourceExecutable := filepath.Join(request.SourceDir, executableName)
+	checksum, mode, err := inspectArtifact(sourceExecutable)
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if request.ExpectedSHA256 != "" && !strings.EqualFold(checksum, request.ExpectedSHA256) {
+		return toolinstall.Installation{}, fmt.Errorf("checksum não confere: esperado %s, recebido %s", request.ExpectedSHA256, checksum)
+	}
+
+	idDir := filepath.Join(s.root, manifest.ID)
+	versionDir := filepath.Join(idDir, manifest.Version)
+	if _, err := os.Stat(versionDir); err == nil {
+		return toolinstall.Installation{}, fmt.Errorf("%s@%s já está instalada", manifest.ID, manifest.Version)
+	} else if !os.IsNotExist(err) {
+		return toolinstall.Installation{}, err
+	}
+	if err := os.MkdirAll(idDir, 0o755); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	temporary, err := os.MkdirTemp(idDir, ".install-")
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	defer func() {
+		if resultErr != nil {
+			_ = os.RemoveAll(temporary)
+		}
+	}()
+
+	if err := copyFile(filepath.Join(temporary, "manifest.yaml"), filepath.Join(request.SourceDir, "manifest.yaml"), 0o600); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if err := copyFile(filepath.Join(temporary, executableName), sourceExecutable, mode.Perm()|0o500); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	// Revalida a cópia que será ativada, não apenas a fonte.
+	copiedRaw, err := os.ReadFile(filepath.Join(temporary, "manifest.yaml"))
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if _, err := toolmanifest.ParseAndValidate(copiedRaw, toolmanifest.ValidationOptions{Categories: s.categories, Target: s.target}); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if _, _, err := inspectArtifact(filepath.Join(temporary, executableName)); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if err := os.Rename(temporary, versionDir); err != nil {
+		return toolinstall.Installation{}, fmt.Errorf("ativar diretório versionado: %w", err)
+	}
+
+	previous, _ := readPointer(idDir, "active")
+	if previous != "" && previous != manifest.Version {
+		if err := writePointer(idDir, "previous", previous); err != nil {
+			return toolinstall.Installation{}, err
+		}
+	}
+	if err := writePointer(idDir, "active", manifest.Version); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	return toolinstall.Installation{
+		ID: manifest.ID, Version: manifest.Version, PreviousVersion: previous,
+		SHA256: checksum, Path: versionDir,
+	}, nil
+}
+
+func (s *Store) List(ctx context.Context) ([]toolinstall.Installed, error) {
+	entries, err := os.ReadDir(s.root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	installed := make([]toolinstall.Installed, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		idDir := filepath.Join(s.root, entry.Name())
+		active, err := readPointer(idDir, "active")
+		if err != nil {
+			continue
+		}
+		previous, _ := readPointer(idDir, "previous")
+		installed = append(installed, toolinstall.Installed{ID: entry.Name(), ActiveVersion: active, PreviousVersion: previous})
+	}
+	sort.Slice(installed, func(i, j int) bool { return installed[i].ID < installed[j].ID })
+	return installed, nil
+}
+
+func (s *Store) Rollback(ctx context.Context, id string) (toolinstall.Installation, error) {
+	if err := safeID(id); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	idDir := filepath.Join(s.root, id)
+	active, err := readPointer(idDir, "active")
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	previous, err := readPointer(idDir, "previous")
+	if err != nil || previous == "" {
+		return toolinstall.Installation{}, fmt.Errorf("%s não tem versão anterior", id)
+	}
+	if err := ctx.Err(); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	manifest, executable, err := s.validateInstalled(idDir, id, previous)
+	if err != nil {
+		return toolinstall.Installation{}, fmt.Errorf("rollback recusado: %w", err)
+	}
+	checksum, _, err := inspectArtifact(executable)
+	if err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if err := writePointer(idDir, "previous", active); err != nil {
+		return toolinstall.Installation{}, err
+	}
+	if err := writePointer(idDir, "active", previous); err != nil {
+		// Restaura o ponteiro auxiliar; active ainda não mudou.
+		_ = writePointer(idDir, "previous", previous)
+		return toolinstall.Installation{}, err
+	}
+	return toolinstall.Installation{
+		ID: id, Version: manifest.Version, PreviousVersion: active,
+		SHA256: checksum, Path: filepath.Join(idDir, previous),
+	}, nil
+}
+
+func (s *Store) Remove(ctx context.Context, id string) (toolinstall.Removal, error) {
+	if err := safeID(id); err != nil {
+		return toolinstall.Removal{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return toolinstall.Removal{}, err
+	}
+	source := filepath.Join(s.root, id)
+	if _, err := os.Stat(source); err != nil {
+		return toolinstall.Removal{}, err
+	}
+	trash := filepath.Join(s.root, ".trash")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		return toolinstall.Removal{}, err
+	}
+	destination := filepath.Join(trash, fmt.Sprintf("%s-%d", id, s.now().UnixNano()))
+	if err := os.Rename(source, destination); err != nil {
+		return toolinstall.Removal{}, err
+	}
+	return toolinstall.Removal{ID: id, RecoveryDir: destination}, nil
+}
+
+func (s *Store) validateInstalled(idDir, id, version string) (toolmanifest.Manifest, string, error) {
+	versionDir := filepath.Join(idDir, version)
+	raw, err := os.ReadFile(filepath.Join(versionDir, "manifest.yaml"))
+	if err != nil {
+		return toolmanifest.Manifest{}, "", err
+	}
+	manifest, err := toolmanifest.ParseAndValidate(raw, toolmanifest.ValidationOptions{Categories: s.categories, Target: s.target})
+	if err != nil {
+		return toolmanifest.Manifest{}, "", err
+	}
+	if manifest.ID != id || manifest.Version != version || !manifest.Supports(s.target) {
+		return toolmanifest.Manifest{}, "", errors.New("manifest não corresponde à versão instalada ou à plataforma")
+	}
+	return manifest, filepath.Join(versionDir, manifest.ExecutableName(s.target)), nil
+}
+
+func inspectArtifact(path string) (string, os.FileMode, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("abrir artefato: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", 0, errors.New("artefato não é arquivo regular")
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), info.Mode(), nil
+}
+
+func copyFile(destination, source string, mode os.FileMode) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func readPointer(idDir, name string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(idDir, name))
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(raw))
+	if value == "" || filepath.Base(value) != value || strings.ContainsAny(value, `/\`) {
+		return "", fmt.Errorf("ponteiro %s inválido", name)
+	}
+	return value, nil
+}
+
+func writePointer(idDir, name, value string) error {
+	if value == "" || filepath.Base(value) != value || strings.ContainsAny(value, `/\`) {
+		return fmt.Errorf("valor inseguro para %s", name)
+	}
+	temporary, err := os.CreateTemp(idDir, "."+name+"-")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.WriteString(value + "\n"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, filepath.Join(idDir, name))
+}
+
+func safeID(id string) error {
+	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+		return errors.New("ID de tool inseguro")
+	}
+	return nil
+}

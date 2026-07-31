@@ -7,17 +7,18 @@ import (
 	"time"
 
 	"github.com/mateuslh/lealing/internal/adapter/outbound/githubclone"
+	hostadapter "github.com/mateuslh/lealing/internal/adapter/outbound/hostaction"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/intellij"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/macos"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/selfupdate"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/usage"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/windows"
 	"github.com/mateuslh/lealing/internal/core/domain"
+	corehost "github.com/mateuslh/lealing/internal/core/hostaction"
 	"github.com/mateuslh/lealing/internal/core/power"
 	"github.com/mateuslh/lealing/internal/core/repoclone"
 	"github.com/mateuslh/lealing/internal/core/sysinfo"
-	"github.com/mateuslh/lealing/internal/core/tokens"
 	"github.com/mateuslh/lealing/internal/platform/xdg"
+	"github.com/mateuslh/lealing/internal/toolmanifest"
 )
 
 // nativeAdapters são as implementações que dependem do sistema operacional.
@@ -31,6 +32,7 @@ type nativeAdapters struct {
 	inspector sysinfo.Inspector
 	power     power.Manager
 	repoClone repoclone.Manager
+	host      corehost.Executor
 }
 
 // adaptersFor escolhe as implementações da plataforma.
@@ -44,6 +46,10 @@ func adaptersFor(p domain.Platform, now func() time.Time, home string) nativeAda
 		return nativeAdapters{
 			inspector: macos.NewSystemInspector(now),
 			power:     macos.NewPowerManager(),
+			host: hostadapter.New(
+				&hostadapter.Command{Executable: "/usr/bin/pbcopy"},
+				&hostadapter.Command{Executable: "/usr/bin/open"},
+			),
 			repoClone: newRepoCloner(home,
 				filepath.Join(home, "Library", "Application Support", "JetBrains",
 					"IntelliJIdea*", "options", "recentProjects.xml"),
@@ -59,6 +65,13 @@ func adaptersFor(p domain.Platform, now func() time.Time, home string) nativeAda
 		return nativeAdapters{
 			inspector: windows.NewSystemInspector(now),
 			power:     windows.NewPowerManager(),
+			host: hostadapter.New(
+				&hostadapter.Command{Executable: "clip.exe"},
+				&hostadapter.Command{
+					Executable: "rundll32.exe",
+					Args:       []string{"url.dll,FileProtocolHandler"},
+				},
+			),
 			repoClone: newRepoCloner(home,
 				filepath.Join(appData, "JetBrains", "IntelliJIdea*",
 					"options", "recentProjects.xml"),
@@ -89,6 +102,12 @@ func currentTarget() selfupdate.Target {
 	return selfupdate.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}
 }
 
+// currentToolTarget identifica a variante de manifest instalada que pode ser
+// descoberta neste binário.
+func currentToolTarget() toolmanifest.Target {
+	return toolmanifest.Target{OS: runtime.GOOS, Arch: runtime.GOARCH}
+}
+
 // directoriesFor resolve os caminhos nativos sem deixar a infraestrutura
 // detectar a plataforma por conta própria.
 func directoriesFor(p domain.Platform) xdg.Directories {
@@ -101,25 +120,4 @@ func userNameFor(p domain.Platform) string {
 		return os.Getenv("USERNAME")
 	}
 	return os.Getenv("USER")
-}
-
-// tokenProvidersFor escolhe somente a integração realmente nativa: o
-// chaveiro do Claude Code no macOS. Caminhos de logs e credenciais continuam
-// explícitos e iguais nas demais plataformas.
-func tokenProvidersFor(p domain.Platform, home string) []tokens.Provider {
-	claudeCredentials := usage.NewLocalCredentials(
-		filepath.Join(home, ".claude", ".credentials.json"),
-		p == domain.Darwin,
-	)
-	codexCredentials := usage.NewCodexFile(filepath.Join(home, ".codex", "auth.json"))
-	return []tokens.Provider{
-		usage.NewClaudeCode(
-			filepath.Join(home, ".claude", "projects"),
-			claudeCredentials,
-		),
-		usage.NewCodex(
-			filepath.Join(home, ".codex", "sessions"),
-			codexCredentials,
-		),
-	}
 }

@@ -26,6 +26,20 @@ func TestDependenciasApontamParaDentro(t *testing.T) {
 	files := projectSources(t)
 
 	for _, file := range files {
+		isExternalTool := strings.HasPrefix(file.rel, "cmd/tools/")
+		if isExternalTool {
+			for _, imported := range file.imports {
+				if strings.HasPrefix(imported, module+"/internal/") {
+					t.Errorf("%s: tool externa importa internal da engine %q", file.rel, imported)
+				}
+			}
+		} else {
+			for _, imported := range file.imports {
+				if strings.HasPrefix(imported, module+"/cmd/tools/") {
+					t.Errorf("%s: engine importa implementação concreta de tool %q", file.rel, imported)
+				}
+			}
+		}
 		// Testes de integração podem montar o grafo real e, portanto, importar
 		// os dois lados. A regra de produção continua protegida; duplos
 		// arquiteturais ficam cobertos pelos testes dos serviços.
@@ -33,6 +47,23 @@ func TestDependenciasApontamParaDentro(t *testing.T) {
 			continue
 		}
 		switch {
+		case isExternalTool:
+
+		case strings.HasPrefix(file.rel, "sdk/protocol/"):
+			for _, imported := range file.imports {
+				if isThirdParty(imported) {
+					t.Errorf("%s: sdk/protocol deve usar só a biblioteca padrão; importa %q", file.rel, imported)
+				}
+			}
+
+		case strings.HasPrefix(file.rel, "sdk/"):
+			for _, imported := range file.imports {
+				if strings.HasPrefix(imported, module+"/internal/bootstrap") ||
+					strings.HasPrefix(imported, module+"/internal/catalog") {
+					t.Errorf("%s: SDK público importa engine concreta %q", file.rel, imported)
+				}
+			}
+
 		case strings.HasPrefix(file.rel, "internal/core/"):
 			for _, imported := range file.imports {
 				if strings.HasPrefix(imported, module+"/internal/") &&

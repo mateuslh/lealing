@@ -110,6 +110,37 @@ type Tool struct {
 	Version string
 	// Experimental marca tools instáveis, destacadas visualmente.
 	Experimental bool
+
+	// Runtime existe somente para tools instaladas fora da engine. O catálogo
+	// continua declarativo: guardar o caminho não inicia nem carrega o binário.
+	Runtime *ExternalRuntime
+}
+
+// ExternalRuntime descreve como abrir uma tool instalada. O caminho já foi
+// confinado pelo provider ao diretório versionado; a existência só é conferida
+// no spawn, para descoberta nunca executar nem depender do binário.
+type ExternalRuntime struct {
+	InstallDir   string
+	Executable   string
+	ProtocolMin  int
+	ProtocolMax  int
+	UIMode       string
+	Capabilities []string
+	Permissions  ToolPermissions
+}
+
+// ToolPermissions são as concessões declaradas no manifest e apresentadas à
+// tool no handshake.
+type ToolPermissions struct {
+	ReadPaths  []string
+	WritePaths []string
+	Network    bool
+	Subprocess bool
+}
+
+// Interactive informa se a tool usa uma sessão screen-v1 dentro do chrome.
+func (t Tool) Interactive() bool {
+	return t.Runtime != nil && t.Runtime.UIMode == "screen-v1"
 }
 
 // SupportedPlatforms resolve o zero-value de Platforms para AllPlatforms.

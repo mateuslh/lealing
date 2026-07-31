@@ -15,8 +15,10 @@ GO_BIN      := $(shell command -v go)
 #   make render SIZE=120x34 KEYS='/git'
 SIZE ?= 150x44
 KEYS ?=
+TOKEN_TOOL_DIR := $(BIN_DIR)/tools/token-usage
+TOKEN_TOOL_VERSION ?= 1.0.0
 
-.PHONY: all build build-windows cross snapshot release run test bench cover lint fmt vet render tidy clean install
+.PHONY: all build build-windows cross snapshot release run test bench cover lint fmt vet render tidy clean install tool-build tool-install tool-validate
 
 all: build
 
@@ -33,10 +35,24 @@ build-windows: ## compila o .exe para Windows em bin/
 # processo que ele dispara —, então uma quebra só aparece no build cruzado
 # quando alguém importa um pacote que não existe do outro lado.
 cross: ## verifica se o código compila nas plataformas suportadas
-	@for os in darwin windows linux; do \
-		printf '%-8s ' $$os; \
-		GOOS=$$os go build ./... && echo ok || exit 1; \
+	@for target in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 linux/amd64 linux/arm64; do \
+		os=$${target%/*}; arch=$${target#*/}; \
+		printf '%-16s ' $$target; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build ./... && echo ok || exit 1; \
 	done
+
+tool-validate: ## valida o manifest da token-usage sem executar a tool
+	go run $(PKG) -tool-validate cmd/tools/token-usage/manifest.yaml
+
+tool-build: tool-validate ## compila a token-usage e prepara um diretório instalável
+	@mkdir -p $(TOKEN_TOOL_DIR)
+	@case "$$(go env GOOS)" in windows) suffix=.exe ;; *) suffix= ;; esac; \
+		go build -trimpath -ldflags '-s -w -X main.version=$(TOKEN_TOOL_VERSION)' \
+		-o "$(TOKEN_TOOL_DIR)/lealing-tool-token-usage$$suffix" ./cmd/tools/token-usage
+	cp cmd/tools/token-usage/manifest.yaml $(TOKEN_TOOL_DIR)/manifest.yaml
+
+tool-install: tool-build ## instala localmente a token-usage externa de desenvolvimento
+	go run $(PKG) -tool-install $(TOKEN_TOOL_DIR)
 
 # Compila e empacota tudo o que a release publicaria, sem tocar no GitHub.
 # É como conferir o .goreleaser.yaml antes de empurrar uma tag.

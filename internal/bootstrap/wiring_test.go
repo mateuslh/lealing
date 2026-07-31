@@ -92,3 +92,14 @@ func TestValidateWiringRecusaProcessoSemRunner(t *testing.T) {
 		t.Fatalf("erro = %v, quero runner ausente", err)
 	}
 }
+
+func TestValidateWiringAceitaScreenV1SemFactoryEspecifica(t *testing.T) {
+	repo := wiringRepo{tools: []domain.Tool{{
+		ID: "external", Kind: domain.KindProcess,
+		Runtime: &domain.ExternalRuntime{UIMode: "screen-v1"},
+	}}}
+
+	if err := validateWiring(context.Background(), repo, nil, nil); err != nil {
+		t.Fatalf("screen-v1 deveria usar a tela genérica: %v", err)
+	}
+}

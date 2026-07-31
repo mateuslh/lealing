@@ -33,6 +33,9 @@ func validateWiring(
 		switch {
 		case tool.Kind == domain.KindBuiltin && !screens.Has(tool.ID):
 			return fmt.Errorf("tool nativa %q sem factory de tela", tool.ID)
+		case tool.Interactive():
+			// Todas as screen-v1 usam a factory genérica criada pela home; não
+			// existe nem deve existir uma entrada por ID em screens.
 		case tool.Kind != domain.KindBuiltin && !runnerSupports(runners, tool.Kind):
 			return fmt.Errorf("tool %q de kind %s sem runner", tool.ID, tool.Kind)
 		}

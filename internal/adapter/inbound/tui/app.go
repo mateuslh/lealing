@@ -73,8 +73,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmd, a.resizeCurrent())
 
 	case BackMsg:
-		if a.router.Pop() {
-			return a, a.refreshCurrent()
+		if popped, closeCmd := a.router.Pop(); popped {
+			return a, tea.Batch(closeCmd, a.refreshCurrent())
 		}
 		return a, nil
 
@@ -94,7 +94,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a *App) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if msg.String() == "ctrl+c" {
 		a.quitting = true
-		return tea.Quit, true
+		return tea.Sequence(a.router.CloseAll(), tea.Quit), true
 	}
 
 	if a.capturing() {
@@ -104,7 +104,7 @@ func (a *App) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
 	case "q":
 		a.quitting = true
-		return tea.Quit, true
+		return tea.Sequence(a.router.CloseAll(), tea.Quit), true
 
 	case "?":
 		a.showHelp = !a.showHelp
@@ -115,8 +115,8 @@ func (a *App) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			a.showHelp = false
 			return nil, true
 		}
-		if a.router.Pop() {
-			return a.refreshCurrent(), true
+		if popped, closeCmd := a.router.Pop(); popped {
+			return tea.Batch(closeCmd, a.refreshCurrent()), true
 		}
 	}
 

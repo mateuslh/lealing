@@ -297,6 +297,25 @@ func TestToggleFavoriteRejeitaToolInexistente(t *testing.T) {
 	}
 }
 
+func TestFavoritoExternoPermaneceAssociadoAoMesmoToolID(t *testing.T) {
+	repo := fixture()
+	repo.tools = append(repo.tools, domain.Tool{
+		ID: "token-usage", Name: "tokens", Category: "k8s", Kind: domain.KindProcess,
+		Runtime: &domain.ExternalRuntime{UIMode: "screen-v1", ProtocolMin: 1, ProtocolMax: 1},
+	})
+	store := newStore()
+	first := service.NewCatalog(repo, prefixSearcher{}, store, fixedClock())
+	if favorite, err := first.ToggleFavorite(context.Background(), "token-usage"); err != nil || !favorite {
+		t.Fatalf("favoritar externa: favorite=%v err=%v", favorite, err)
+	}
+	// Recriar o serviço simula reiniciar a engine e redescobrir o manifest.
+	second := service.NewCatalog(repo, prefixSearcher{}, store, fixedClock())
+	usage, err := second.Usage(context.Background(), "token-usage")
+	if err != nil || !usage.Favorite || usage.ToolID != "token-usage" {
+		t.Fatalf("uso após redescoberta = %+v, %v", usage, err)
+	}
+}
+
 func TestRecordRunIncrementaEMarcaHorario(t *testing.T) {
 	store := newStore()
 	svc := service.NewCatalog(fixture(), prefixSearcher{}, store, fixedClock())

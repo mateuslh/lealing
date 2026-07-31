@@ -116,6 +116,10 @@ type Router struct {
 	stack []Screen
 }
 
+// screenCloser permite que uma tela libere processos e canais ao sair da
+// pilha sem bloquear o Update do App.
+type screenCloser interface{ Close() tea.Cmd }
+
 // NewRouter cria o router com a tela raiz.
 func NewRouter(root Screen) *Router {
 	return &Router{stack: []Screen{root}}
@@ -136,12 +140,27 @@ func (r *Router) Push(s Screen) tea.Cmd {
 }
 
 // Pop desempilha, nunca esvaziando a pilha: a raiz é permanente.
-func (r *Router) Pop() bool {
+func (r *Router) Pop() (bool, tea.Cmd) {
 	if len(r.stack) <= 1 {
-		return false
+		return false, nil
 	}
+	current := r.stack[len(r.stack)-1]
 	r.stack = r.stack[:len(r.stack)-1]
-	return true
+	if closer, ok := current.(screenCloser); ok {
+		return true, closer.Close()
+	}
+	return true, nil
+}
+
+// CloseAll encerra recursos de todas as telas empilhadas antes de sair.
+func (r *Router) CloseAll() tea.Cmd {
+	var commands []tea.Cmd
+	for i := len(r.stack) - 1; i >= 0; i-- {
+		if closer, ok := r.stack[i].(screenCloser); ok {
+			commands = append(commands, closer.Close())
+		}
+	}
+	return tea.Sequence(commands...)
 }
 
 // Depth é a profundidade atual da navegação.

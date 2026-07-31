@@ -17,6 +17,8 @@ type Directories struct {
 	Config string
 	Data   string
 	State  string
+	Cache  string
+	Tools  string
 }
 
 // Resolve devolve os diretórios XDG com fallback nativo.
@@ -25,11 +27,14 @@ type Directories struct {
 // operacional por conta própria, o que mantém toda seleção de plataforma em
 // um único lugar.
 func Resolve(windows bool) Directories {
-	return Directories{
+	directories := Directories{
 		Config: resolve(windows, "XDG_CONFIG_HOME", "APPDATA", filepath.Join(".config")),
 		Data:   resolve(windows, "XDG_DATA_HOME", "LOCALAPPDATA", filepath.Join(".local", "share")),
 		State:  resolve(windows, "XDG_STATE_HOME", "LOCALAPPDATA", filepath.Join(".local", "state")),
+		Cache:  resolve(windows, "XDG_CACHE_HOME", "LOCALAPPDATA", filepath.Join(".cache")),
 	}
+	directories.Tools = filepath.Join(directories.Data, "tools")
+	return directories
 }
 
 // resolve procura, nesta ordem: a variável XDG (que o usuário pode definir em
