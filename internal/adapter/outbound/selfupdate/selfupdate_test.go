@@ -119,6 +119,14 @@ func TestLocateRecusaOutroModulo(t *testing.T) {
 }
 
 func TestLocateMarcaDiretorioSemEscrita(t *testing.T) {
+	// No Windows o os.Chmod só mexe no atributo somente-leitura de arquivos e
+	// não faz nada em diretório: a permissão de verdade está na ACL, que este
+	// teste não tem como montar. O código sob teste é o mesmo nos dois — ele
+	// tenta criar um arquivo e observa o resultado.
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod não tira a escrita de um diretório no Windows")
+	}
+
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Skipf("sem como tirar a escrita do diretório: %v", err)
