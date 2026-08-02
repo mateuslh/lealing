@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -25,6 +24,7 @@ import (
 	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
+	usersyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/usersync"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/claudecli"
 	devkitadapter "github.com/mateuslh/lealing/internal/adapter/outbound/devkit"
@@ -43,6 +43,7 @@ import (
 	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
+	"github.com/mateuslh/lealing/internal/core/usersync"
 	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/sdk/protocol"
 )
@@ -127,7 +128,7 @@ func Wire(opts Options) (*App, error) {
 	} else {
 		// O debounce de meio segundo agrupa rajadas de favoritos em uma
 		// única escrita, sem que o usuário perceba atraso.
-		file := persistence.NewUsageFile(filepath.Join(directories.Data, "usage.json"), 500*time.Millisecond)
+		file := persistence.NewUsageFile(filepath.Join(directories.Data, UsageFileName), usageDebounce)
 		app.closers = append(app.closers, file.Close)
 		usageStore = file
 	}
@@ -146,8 +147,17 @@ func Wire(opts Options) (*App, error) {
 	prerequisites := service.NewPrerequisites(repo, requirements.NewPathChecker())
 	toolManager := newToolManager(directories.Tools)
 	marketplaceSvc := newMarketplaceManager(
-		opts.Version, opts.MarketplaceURL, toolManager, repo, directories.Cache,
+		opts.Version, opts.MarketplaceURL, toolManager, repo, directories,
 	)
+
+	// A sincronização fica de fora da sessão efêmera: ela existe para
+	// persistir preferências, e persistir na nuvem o que o usuário pediu para
+	// não persistir em disco seria contrariar a própria flag.
+	var syncSvc usersync.Manager
+	if !opts.Ephemeral {
+		syncSvc = newSyncManager(opts.Version, directories,
+			usageStore, marketplaceSourceStore(directories), toolManager)
+	}
 
 	var toolRunners []outbound.ToolRunner
 	launcher := service.NewLauncher(repo, catalogSvc, clock, log, toolRunners...)
@@ -206,11 +216,13 @@ func Wire(opts Options) (*App, error) {
 	// pela factory genérica da home, sem uma entrada por ID neste mapa.
 	screens := tui.Screens{
 		"claude-accounts": func() tui.Screen { return accountsscreen.New(deps, accounts, clock.Now) },
-		"marketplace":     func() tui.Screen { return marketplacescreen.New(deps, marketplaceSvc) },
 		"self-update": func() tui.Screen {
 			return updatescreen.New(deps, Updater(opts.Version), userHome, clock.Now)
 		},
 		"git-dev-radar": func() tui.Screen { return gitinsightscreen.New(deps, gitScanner) },
+		"account-sync": func() tui.Screen {
+			return usersyncscreen.New(deps, syncSvc, hostActions, clock.Now)
+		},
 	}
 	for _, definition := range devkit.Definitions() {
 		definition := definition
@@ -248,6 +260,9 @@ func Wire(opts Options) (*App, error) {
 		Interactive:   interactiveTools,
 		HostActions:   hostActions,
 		Marketplace:   marketplaceSvc,
+		// A loja não entra em `screens`: ela não é uma tool do catálogo, e sim
+		// a porta por onde as tools chegam. A home a abre pela vitrine.
+		MarketplaceScreen: func() tui.Screen { return marketplacescreen.New(deps, marketplaceSvc) },
 	})
 
 	app.ui = tui.NewApp(th, root)
