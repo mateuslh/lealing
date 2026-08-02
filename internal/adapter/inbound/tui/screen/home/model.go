@@ -21,6 +21,7 @@ import (
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/hostaction"
 	"github.com/mateuslh/lealing/internal/core/interactive"
+	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
 )
 
@@ -50,6 +51,7 @@ type Model struct {
 	screens     tui.Screens
 	interactive interactive.Opener
 	hostActions hostaction.Actions
+	marketplace coremarket.Manager
 
 	width, height int
 
@@ -83,6 +85,10 @@ type Model struct {
 	err     error
 	toast   toast
 	user    string
+
+	marketplaceTools   []coremarket.Listing
+	marketplaceLoading bool
+	marketplaceErr     error
 }
 
 // toast é uma mensagem efêmera na barra de status.
@@ -123,6 +129,9 @@ type Config struct {
 	// Interactive abre qualquer manifest screen-v1 pela mesma tela genérica.
 	Interactive interactive.Opener
 	HostActions hostaction.Actions
+	// Marketplace é opcional para manter a home testável e permitir que a
+	// engine inicie mesmo quando o índice público estiver indisponível.
+	Marketplace coremarket.Manager
 }
 
 // New monta a home. Nada é carregado aqui — a primeira carga acontece em
@@ -139,19 +148,21 @@ func New(cfg Config) *Model {
 	}
 
 	return &Model{
-		deps:        cfg.Deps,
-		catalog:     cfg.Catalog,
-		prefs:       cfg.Prefs,
-		launch:      cfg.Launcher,
-		prereqs:     cfg.Prerequisites,
-		now:         now,
-		screens:     cfg.Screens,
-		interactive: cfg.Interactive,
-		hostActions: cfg.HostActions,
-		input:       in,
-		catByID:     map[domain.CategoryID]domain.Category{},
-		loading:     true,
-		user:        fallbackUser(cfg.User),
+		deps:               cfg.Deps,
+		catalog:            cfg.Catalog,
+		prefs:              cfg.Prefs,
+		launch:             cfg.Launcher,
+		prereqs:            cfg.Prerequisites,
+		now:                now,
+		screens:            cfg.Screens,
+		interactive:        cfg.Interactive,
+		hostActions:        cfg.HostActions,
+		marketplace:        cfg.Marketplace,
+		input:              in,
+		catByID:            map[domain.CategoryID]domain.Category{},
+		loading:            true,
+		marketplaceLoading: cfg.Marketplace != nil,
+		user:               fallbackUser(cfg.User),
 		// Abre com o foco em "sugeridas": é o único painel garantidamente
 		// preenchido na primeira execução, e focar a sidebar de saída
 		// esmaeceria o espectro inteiro menos uma categoria.
@@ -167,12 +178,22 @@ func (m *Model) Title() string { return "home" }
 
 // Init implementa tui.Screen.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.loadCatalog(), tick())
+	cmds := []tea.Cmd{m.loadCatalog(), tick()}
+	if m.marketplace != nil {
+		cmds = append(cmds, m.loadMarketplace())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Refresh implementa o contrato opcional do App. Não repete o tick: o relógio
 // da home nunca parou, e um segundo ticker faria o toast expirar cedo demais.
-func (m *Model) Refresh() tea.Cmd { return m.loadCatalog() }
+func (m *Model) Refresh() tea.Cmd {
+	cmds := []tea.Cmd{m.loadCatalog()}
+	if m.marketplace != nil {
+		cmds = append(cmds, m.loadMarketplace())
+	}
+	return tea.Batch(cmds...)
+}
 
 func fallbackUser(user string) string {
 	if user != "" {
@@ -207,6 +228,11 @@ type catalogMsg struct {
 	highlights domain.Highlights
 	categories []inbound.CategoryView
 	err        error
+}
+
+type marketplaceMsg struct {
+	tools []coremarket.Listing
+	err   error
 }
 
 // resultsMsg traz o resultado de uma busca, carimbado com a geração.
@@ -275,6 +301,18 @@ func (m *Model) loadCatalog() tea.Cmd {
 			return catalogMsg{err: err}
 		}
 		return catalogMsg{highlights: hl, categories: cats}
+	}
+}
+
+// loadMarketplace consulta apenas metadados; nenhum artefato é baixado ou
+// executado. A chamada ocorre em uma Cmd para que a rede nunca congele a Home.
+func (m *Model) loadMarketplace() tea.Cmd {
+	manager := m.marketplace
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		tools, err := manager.List(ctx)
+		return marketplaceMsg{tools: tools, err: err}
 	}
 }
 

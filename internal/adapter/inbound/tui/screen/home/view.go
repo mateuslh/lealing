@@ -159,6 +159,15 @@ func (m *Model) viewBrowse(th *theme.Theme, width, height int) string {
 	blocks = append(blocks, search)
 	used += lipgloss.Height(search)
 
+	// A vitrine compacta torna o marketplace descobrível sem transformar a
+	// Home em uma segunda tela de catálogo. O conteúdo completo continua no
+	// painel dedicado, aberto com "m" ou pelo item da busca.
+	if m.marketplace != nil && height >= 24 {
+		market := m.viewMarketplace(th, inner, 6)
+		blocks = append(blocks, "", market)
+		used += lipgloss.Height(market) + 1
+	}
+
 	if height >= spectrumMinRows && len(m.categories) > 2 {
 		spectrum := m.viewSpectrum(th, inner)
 		blocks = append(blocks, "", spectrum)
@@ -170,6 +179,50 @@ func (m *Model) viewBrowse(th *theme.Theme, width, height int) string {
 
 	body := lipgloss.JoinVertical(lipgloss.Left, blocks...)
 	return pad.Render(lipgloss.NewStyle().Width(inner).MaxHeight(height).Render(body))
+}
+
+func (m *Model) viewMarketplace(th *theme.Theme, width, height int) string {
+	if m.marketplaceLoading && len(m.marketplaceTools) == 0 {
+		body := th.Dim.Render("consultando o índice público…")
+		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Primary,
+			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, body))
+	}
+	if m.marketplaceErr != nil && len(m.marketplaceTools) == 0 {
+		body := lipgloss.NewStyle().Foreground(th.Warning).Render("índice indisponível — pressione m para tentar novamente")
+		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Warning,
+			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, component.TruncateTail(body, width-4)))
+	}
+	if len(m.marketplaceTools) == 0 {
+		body := th.Ghost.Render("nenhuma tool publicada para esta plataforma")
+		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Muted,
+			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, body))
+	}
+
+	limit := min(len(m.marketplaceTools), 3)
+	items := make([]string, 0, limit)
+	for _, listing := range m.marketplaceTools[:limit] {
+		state := th.Ghost.Render(listing.Version)
+		if listing.UpdateAvailable {
+			state = lipgloss.NewStyle().Foreground(th.Warning).Render("↑ atualizar")
+		} else if listing.InstalledVersion != "" {
+			state = lipgloss.NewStyle().Foreground(th.Success).Render("✓ instalada")
+		}
+		name := th.Item.Render(marketplaceGlyph(listing.Glyph) + " " + listing.Name)
+		items = append(items, component.Spread(name, state, width-4))
+	}
+	if remaining := len(m.marketplaceTools) - limit; remaining > 0 {
+		items = append(items, th.Ghost.Render(fmt.Sprintf("+ %d outras tools disponíveis", remaining)))
+	}
+	body := strings.Join(items, "\n")
+	return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Primary,
+		Width: width, Height: height, Footer: "m abrir loja · ↵ instalar"}.Render(th, body)
+}
+
+func marketplaceGlyph(glyph string) string {
+	if strings.TrimSpace(glyph) == "" {
+		return "◫"
+	}
+	return glyph
 }
 
 // viewHero monta o bloco de abertura.
@@ -495,6 +548,7 @@ func (m *Model) Hints() []tui.Hint {
 	}
 	return []tui.Hint{
 		{Key: "/", Label: "buscar"},
+		{Key: "m", Label: "marketplace"},
 		{Key: "↵", Label: "abrir"},
 		{Key: "f", Label: "favoritar"},
 		{Key: "↹", Label: "painel"},

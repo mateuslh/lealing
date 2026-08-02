@@ -97,8 +97,10 @@ lealing -tool-update token-usage
 lealing -tools
 ```
 
-O índice só é consultado ao abrir o marketplace ou ao executar um desses
-comandos; startup e busca local não fazem rede nem iniciam processos. O pacote
+Ao abrir a Home, a vitrine consulta os metadados do índice em segundo plano;
+ela nunca bloqueia a interface. A tela completa e a CLI reutilizam a mesma
+porta. Busca local não inicia processos, e nenhum executável é iniciado durante
+a descoberta. O pacote
 é baixado para cache temporário com limite de tamanho, tem o SHA-256 conferido
 antes da extração, recusa caminhos externos e links e é revalidado contra o ID
 e a versão escolhidos antes da troca atômica.

@@ -247,6 +247,7 @@ func Wire(opts Options) (*App, error) {
 		Screens:       screens,
 		Interactive:   interactiveTools,
 		HostActions:   hostActions,
+		Marketplace:   marketplaceSvc,
 	})
 
 	app.ui = tui.NewApp(th, root)

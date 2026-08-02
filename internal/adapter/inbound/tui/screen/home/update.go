@@ -71,6 +71,14 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 		}
 		return m, nil
 
+	case marketplaceMsg:
+		m.marketplaceLoading = false
+		m.marketplaceErr = msg.err
+		if msg.err == nil {
+			m.marketplaceTools = msg.tools
+		}
+		return m, nil
+
 	case resultsMsg:
 		// Descarta respostas de buscas que já foram superadas.
 		if msg.gen != m.queryGen {
@@ -315,7 +323,16 @@ func (m *Model) handleBrowseKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	case "r", "ctrl+r":
 		m.loading = true
 		m.notify("recarregando catálogo…", toneInfo)
-		return m, m.loadCatalog()
+		cmds := []tea.Cmd{m.loadCatalog()}
+		if m.marketplace != nil {
+			m.marketplaceLoading = true
+			m.marketplaceErr = nil
+			cmds = append(cmds, m.loadMarketplace())
+		}
+		return m, tea.Batch(cmds...)
+
+	case "m":
+		return m, m.openReady(domain.Tool{ID: "marketplace"}, false)
 	}
 
 	return m, nil

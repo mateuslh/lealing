@@ -507,6 +507,27 @@ func TestHomeExpoeRefresh(t *testing.T) {
 	var _ interface{ Refresh() tea.Cmd } = (*Model)(nil)
 }
 
+func TestAtalhoMarketplaceAbreTelaDedicada(t *testing.T) {
+	m := newTestModelWith(t, tui.Screens{"marketplace": func() tui.Screen { return stubScreen{} }})
+	_, cmd := press(t, m, "m")
+	if cmd == nil {
+		t.Fatal("atalho m não produziu navegação")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("atalho m devolveu %T, quero BatchMsg", msg)
+	}
+	for _, command := range batch {
+		if next := command(); next != nil {
+			if nav, ok := next.(tui.NavigateMsg); ok && nav.Screen.ID() == "stub" {
+				return
+			}
+		}
+	}
+	t.Fatal("atalho m não abriu a tela do marketplace")
+}
+
 type requirementCheckerStub struct{ missing []domain.Requirement }
 
 func (s requirementCheckerStub) Missing(
