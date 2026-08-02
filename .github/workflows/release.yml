@@ -103,3 +103,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Variável do repositório, não segredo: o client_id do device flow
+          # é público e precisa ser legível para entrar no binário.
+          LEALING_GITHUB_CLIENT_ID: ${{ vars.LEALING_GITHUB_CLIENT_ID }}

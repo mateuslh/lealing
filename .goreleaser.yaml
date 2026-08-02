@@ -31,6 +31,12 @@ builds:
       # A versão precisa ser a tag inteira, com o "v": é assim que a tool de
       # atualização compara o que roda com o que está publicado.
       - -s -w -X main.version={{ .Tag }}
+      # O client_id do OAuth App entra no binário publicado. Ele é público
+      # por definição no device flow — o que não existe é segredo de cliente
+      # —, mas cada fork precisa do seu, senão os usuários aparecem como o
+      # aplicativo de outra pessoa na página de autorizações. Vazio desliga a
+      # sincronização em vez de quebrá-la no meio do login.
+      - -X github.com/mateuslh/lealing/internal/bootstrap.githubClientID={{ index .Env "LEALING_GITHUB_CLIENT_ID" }}
     goos:
       - darwin
       - windows
