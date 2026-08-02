@@ -28,6 +28,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
+	usersyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/usersync"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	coreaccount "github.com/mateuslh/lealing/internal/core/ccaccount"
 	coredevkit "github.com/mateuslh/lealing/internal/core/devkit"
@@ -40,6 +41,7 @@ import (
 	coreselfupdate "github.com/mateuslh/lealing/internal/core/selfupdate"
 	coresysinfo "github.com/mateuslh/lealing/internal/core/sysinfo"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	coreusersync "github.com/mateuslh/lealing/internal/core/usersync"
 )
 
 var frames = []tui.Frame{
@@ -135,11 +137,60 @@ func (f *fakeInteractiveSession) Send(context.Context, interactive.Event) error 
 func (f *fakeInteractiveSession) Respond(context.Context, interactive.HostResponse) error { return nil }
 func (f *fakeInteractiveSession) Shutdown(context.Context) error                          { return nil }
 
-type fakeMarketplace struct{ tools []coremarket.Listing }
+type fakeMarketplace struct {
+	tools   []coremarket.Listing
+	origins []coremarket.Origin
+	sources []coremarket.SourceStatus
+}
 
+func (f fakeMarketplace) Catalog(context.Context) (coremarket.Catalog, error) {
+	return coremarket.Catalog{Tools: f.tools, Sources: f.sources}, nil
+}
 func (f fakeMarketplace) List(context.Context) ([]coremarket.Listing, error) { return f.tools, nil }
 func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installation, error) {
 	return toolinstall.Installation{}, nil
+}
+func (f fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) {
+	return f.origins, nil
+}
+func (fakeMarketplace) AddSource(context.Context, coremarket.Origin) error   { return nil }
+func (fakeMarketplace) RemoveSource(context.Context, string) error           { return nil }
+func (fakeMarketplace) SetSourceEnabled(context.Context, string, bool) error { return nil }
+
+// marketplaceScreen monta a loja com duas origens — uma delas fora do ar — e
+// tools em todos os estados, que é a combinação com mais texto disputando
+// espaço na moldura.
+func marketplaceScreen() tui.Screen {
+	official := coremarket.Origin{
+		Name: "lealing", Label: "índice oficial", Kind: coremarket.OriginRemote,
+		Ref:     "https://raw.githubusercontent.com/mateuslh/lealing-tools/main/marketplace/index.json",
+		Trusted: true, Builtin: true, Enabled: true,
+	}
+	local := coremarket.Origin{
+		Name: "meu-repo", Label: "repositório de trabalho", Kind: coremarket.OriginLocal,
+		Ref: "/Users/alguem/dev/minhas-tools", Enabled: true, Priority: 1,
+	}
+	return marketplacescreen.New(deps(), fakeMarketplace{
+		origins: []coremarket.Origin{official, local},
+		sources: []coremarket.SourceStatus{
+			{Origin: official, Tools: 2},
+			{Origin: local, Err: errors.New("índice local ilegível: permissão negada")},
+		},
+		tools: []coremarket.Listing{
+			{Entry: coremarket.Entry{
+				ID: "token-usage", Version: "1.0.0", Name: "Uso de Tokens",
+				Summary: "Mostra consumo de tokens e custos estimados.", Publisher: "mateuslh",
+				DistributionTier: coremarket.ChannelOfficial, Risk: "safe", Glyph: "✧",
+				Protocol: coremarket.VersionRange{Min: 1, Max: 1}, Origin: official,
+			}},
+			{Entry: coremarket.Entry{
+				ID: "community-demo", Version: "2.3.0", Name: "Tool da Comunidade com Nome Longo",
+				Summary: "Demonstra a listagem de uma publicação comunitária.", Publisher: "example",
+				DistributionTier: coremarket.ChannelCommunity, Risk: "caution",
+				Protocol: coremarket.VersionRange{Min: 1, Max: 1}, Origin: local,
+			}, InstalledVersion: "2.2.0", UpdateAvailable: true, Shadowed: []string{"lealing"}},
+		},
+	})
 }
 
 type fakeDevkitRunner struct{}
@@ -395,22 +446,37 @@ var cases = append([]screenCase{
 		keys:  []string{"tab", "down"},
 	},
 	{
-		name: "marketplace",
-		build: func(t *testing.T) tui.Screen {
-			return settle(t, marketplacescreen.New(deps(), fakeMarketplace{tools: []coremarket.Listing{
-				{Entry: coremarket.Entry{
-					ID: "token-usage", Version: "1.0.0", Name: "Uso de Tokens",
-					Summary: "Mostra consumo de tokens e custos estimados.", Publisher: "mateuslh",
-					DistributionTier: coremarket.ChannelOfficial, Risk: "safe", Glyph: "✧",
-				}},
-				{Entry: coremarket.Entry{
-					ID: "community-demo", Version: "2.3.0", Name: "Tool da Comunidade com Nome Longo",
-					Summary: "Demonstra a listagem de uma publicação comunitária.", Publisher: "example",
-					DistributionTier: coremarket.ChannelCommunity, Risk: "caution",
-				}, InstalledVersion: "2.2.0", UpdateAvailable: true},
-			}}))
-		},
-		keys: []string{"down"},
+		name:  "marketplace",
+		build: func(t *testing.T) tui.Screen { return settle(t, marketplaceScreen()) },
+		keys:  []string{"down"},
+	},
+	{
+		// A aba de origens tem a linha mais longa da tela (URL do índice) e é
+		// a que primeiro estoura a moldura quando a janela encolhe.
+		name:  "marketplace origens",
+		build: func(t *testing.T) tui.Screen { return settle(t, marketplaceScreen()) },
+		keys:  []string{"tab", "down"},
+	},
+	{
+		name:  "marketplace cadastro de origem",
+		build: func(t *testing.T) tui.Screen { return settle(t, marketplaceScreen()) },
+		keys:  []string{"a"},
+	},
+	{
+		// A ficha em largura cheia carrega o texto mais longo da tela; é onde
+		// a quebra de linha e a rolagem podem estourar a moldura.
+		name:  "marketplace ficha da tool",
+		build: func(t *testing.T) tui.Screen { return settle(t, marketplaceScreen()) },
+		keys:  []string{"right", "pgdown"},
+	},
+	{
+		name:  "sincronização conectada",
+		build: func(t *testing.T) tui.Screen { return settle(t, usersyncScreen()) },
+		keys:  []string{"down"},
+	},
+	{
+		name:  "sincronização desconectada",
+		build: func(t *testing.T) tui.Screen { return settle(t, usersyncScreen(disconnect)) },
 	},
 	{
 		name: "confirmação global",
@@ -791,4 +857,56 @@ func stripANSI(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+// fakeUserSync devolve um retrato pronto: a tela de sincronização só desenha
+// o que o caso de uso já resolveu.
+type fakeUserSync struct{ status coreusersync.Status }
+
+func (f fakeUserSync) Status(context.Context) (coreusersync.Status, error) { return f.status, nil }
+func (fakeUserSync) StartLogin(context.Context) (coreusersync.DeviceCode, error) {
+	return coreusersync.DeviceCode{}, nil
+}
+func (fakeUserSync) CompleteLogin(context.Context, coreusersync.DeviceCode) (coreusersync.Identity, error) {
+	return coreusersync.Identity{}, nil
+}
+func (fakeUserSync) Logout(context.Context) error { return nil }
+func (fakeUserSync) Push(context.Context, bool) (coreusersync.Result, error) {
+	return coreusersync.Result{}, nil
+}
+func (fakeUserSync) Pull(context.Context, bool) (coreusersync.Result, error) {
+	return coreusersync.Result{}, nil
+}
+func (fakeUserSync) SetSection(context.Context, coreusersync.Section, bool) error { return nil }
+
+// disconnect derruba a conta do retrato, para exercitar o convite ao login.
+func disconnect(status *coreusersync.Status) { status.Connected = false }
+
+func usersyncScreen(mutations ...func(*coreusersync.Status)) tui.Screen {
+	status := coreusersync.Status{
+		Connected:  true,
+		Identity:   coreusersync.Identity{Login: "mateuslh", Name: "Mateus Leal Hemkemeier"},
+		Repository: coreusersync.DefaultRepository,
+		Selection:  coreusersync.DefaultSelection(),
+		LastSync:   fixedNow().Add(-90 * time.Minute),
+		Diverged:   true,
+		Local: coreusersync.State{
+			Usage: []coreusersync.ToolUsage{
+				{ID: "git-dev-radar", Runs: 12, Favorite: true},
+				{ID: "power-control", Runs: 3},
+			},
+			Sources: []coreusersync.MarketplaceSource{
+				{Name: "meu-repo", Kind: "local", Ref: "/Users/alguem/dev/minhas-tools", Enabled: true},
+			},
+			Tools: []coreusersync.InstalledTool{{ID: "token-usage", Version: "1.0.1"}},
+		},
+		Remote: coreusersync.State{
+			Device: "notebook-do-trabalho", UpdatedAt: fixedNow().Add(-26 * time.Hour),
+			Usage: []coreusersync.ToolUsage{{ID: "git-dev-radar", Runs: 40, Favorite: true}},
+		},
+	}
+	for _, mutate := range mutations {
+		mutate(&status)
+	}
+	return usersyncscreen.New(deps(), fakeUserSync{status: status}, nil, fixedNow)
 }

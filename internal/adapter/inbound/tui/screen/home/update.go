@@ -31,6 +31,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.normalizeFocus()
 		return m, nil
 
 	case catalogMsg:
@@ -75,7 +76,7 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 		m.marketplaceLoading = false
 		m.marketplaceErr = msg.err
 		if msg.err == nil {
-			m.marketplaceTools = msg.tools
+			m.marketplaceCatalog = msg.catalog
 		}
 		return m, nil
 
@@ -218,6 +219,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	if m.searching {
 		return m.handleSearchKey(msg)
 	}
+	// A conferência acontece aqui, e não no redimensionamento: é depois do
+	// render que se sabe o que coube na tela, e é a tecla seguinte que o
+	// usuário vai usar esperando que o foco esteja em algo visível.
+	m.normalizeFocus()
 	return m.handleBrowseKey(msg)
 }
 
@@ -311,9 +316,12 @@ func (m *Model) handleBrowseKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		if m.focus == zoneSearch {
+		switch m.focus {
+		case zoneSearch:
 			m.enterSearch()
 			return m, textinputBlink()
+		case zoneMarketplace:
+			return m, m.openMarketplace()
 		}
 		if t, ok := m.selectedTool(); ok {
 			return m, m.openTool(t)
@@ -332,7 +340,7 @@ func (m *Model) handleBrowseKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case "m":
-		return m, m.openReady(domain.Tool{ID: "marketplace"}, false)
+		return m, m.openMarketplace()
 	}
 
 	return m, nil
@@ -373,6 +381,16 @@ func (m *Model) moveZone(delta int) tea.Cmd {
 		}
 		return nil
 	}
+	// A vitrine ocupa a largura inteira: não há vizinho lateral dentro dela,
+	// então a seta horizontal sai para a coluna ao lado ou para os painéis.
+	if m.focus == zoneMarketplace {
+		if delta < 0 && m.sidebarVisible() {
+			m.focus = zoneSidebar
+		} else if delta > 0 {
+			m.focus = m.primaryContentZone()
+		}
+		return nil
+	}
 
 	zones := m.contentZones()
 	idx := 0
@@ -404,15 +422,38 @@ func (m *Model) moveZone(delta int) tea.Cmd {
 func (m *Model) moveVertical(delta int) tea.Cmd {
 	if m.focus == zoneSearch {
 		if delta > 0 {
-			m.focus = m.primaryContentZone()
+			m.focus = m.zoneBelowSearch()
 		}
 		return nil
 	}
+	// A vitrine é um bloco só: a seta atravessa em vez de mover um cursor
+	// que não existe.
+	if m.focus == zoneMarketplace {
+		if delta > 0 {
+			m.focus = m.primaryContentZone()
+		} else {
+			m.focus = zoneSearch
+		}
+		return nil
+	}
+	// Subir do topo de um painel passa pela vitrine quando ela está na tela.
 	if m.focus != zoneSidebar && delta < 0 && m.cursor[m.focus] == 0 {
 		m.focus = zoneSearch
+		if m.marketplaceVisible() {
+			m.focus = zoneMarketplace
+		}
 		return nil
 	}
 	return m.moveCursor(delta)
+}
+
+// zoneBelowSearch é o que recebe o foco ao descer da busca: a vitrine quando
+// ela está na tela, senão o primeiro painel com conteúdo.
+func (m *Model) zoneBelowSearch() zone {
+	if m.marketplaceVisible() {
+		return zoneMarketplace
+	}
+	return m.primaryContentZone()
 }
 
 // moveCursor move a seleção dentro da zona focada, sem wrap-around.
@@ -447,6 +488,7 @@ func (m *Model) jumpCursor(target int) tea.Cmd {
 // nenhuma tool do filtro antigo pisca sob o novo rótulo.
 func (m *Model) filterChanged() tea.Cmd {
 	m.filterGen++
+	m.normalizeFocus()
 	m.cursor[zoneSuggested] = 0
 	if m.hasFilter() {
 		m.filterLoading = true
@@ -464,6 +506,34 @@ func (m *Model) clampCursors() {
 	for z := zone(0); z < zoneCount; z++ {
 		m.cursor[z] = min(m.cursor[z], max(m.zoneLen(z)-1, 0))
 	}
+}
+
+// normalizeFocus tira o foco de uma zona que saiu da tela. Sem isto, filtrar
+// por categoria ou encolher a janela deixaria as setas movendo um cursor que
+// o usuário não está mais vendo.
+func (m *Model) normalizeFocus() {
+	if m.focus == zoneMarketplace && !m.marketplaceVisible() {
+		m.focus = zoneSearch
+		return
+	}
+	if !isPanelZone(m.focus) {
+		return
+	}
+	for _, z := range m.contentZones() {
+		if z == m.focus {
+			return
+		}
+	}
+	m.focus = m.primaryContentZone()
+}
+
+func isPanelZone(z zone) bool {
+	for _, panel := range panelZones {
+		if panel == z {
+			return true
+		}
+	}
+	return false
 }
 
 // zoneLen devolve quantos itens a zona contém.
@@ -532,27 +602,40 @@ func (m *Model) sidebarVisible() bool {
 	return m.width-2 >= sidebarMinTotal && len(m.categories) > 0
 }
 
-// contentZones omite painéis que não existem no recorte por categoria.
+// marketplaceVisible espelha a condição de render da vitrine. Foco em uma
+// zona que não está desenhada deixaria a tecla Enter sem efeito visível.
+func (m *Model) marketplaceVisible() bool {
+	return m.marketplace != nil && !m.hasFilter() && m.height-2 >= marketplaceMinHeight
+}
+
+// contentZones são os painéis alcançáveis pelo teclado: os que o último
+// render desenhou. Antes do primeiro frame a lista está vazia, e aí valem os
+// três painéis declarados.
 func (m *Model) contentZones() []zone {
 	if m.hasFilter() {
 		return []zone{zoneSuggested}
 	}
+	if len(m.drawnPanels) > 0 {
+		return m.drawnPanels
+	}
 	return panelZones[:]
 }
 
+// primaryContentZone é o painel que recebe o foco ao descer da busca: o
+// primeiro desenhado que tenha conteúdo, ou o primeiro desenhado.
 func (m *Model) primaryContentZone() zone {
-	if _, filtered := m.selectedCategory(); filtered {
-		return zoneSuggested
+	zones := m.contentZones()
+	if len(zones) == 0 {
+		// Janela baixa demais para qualquer painel: a busca é o único lugar
+		// onde o foco ainda significa alguma coisa.
+		return zoneSearch
 	}
-	if len(m.highlights.Suggested) > 0 {
-		return zoneSuggested
-	}
-	for _, z := range panelZones {
+	for _, z := range zones {
 		if m.zoneLen(z) > 0 {
 			return z
 		}
 	}
-	return zoneSuggested
+	return zones[0]
 }
 
 // cycleZone preserva o Tab como alternativa, mas percorre só regiões que
@@ -563,6 +646,9 @@ func (m *Model) cycleZone(delta int) {
 		zones = append(zones, zoneSidebar)
 	}
 	zones = append(zones, zoneSearch)
+	if m.marketplaceVisible() {
+		zones = append(zones, zoneMarketplace)
+	}
 	zones = append(zones, m.contentZones()...)
 
 	current := 0

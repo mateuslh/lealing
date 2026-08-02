@@ -31,6 +31,9 @@ type zone uint8
 const (
 	zoneSidebar zone = iota
 	zoneSearch
+	// zoneMarketplace é a vitrine. Ela não tem cursor interno: o bloco todo
+	// é um único alvo, e Enter abre a loja.
+	zoneMarketplace
 	zoneFavorites
 	zoneRecent
 	zoneSuggested
@@ -52,6 +55,10 @@ type Model struct {
 	interactive interactive.Opener
 	hostActions hostaction.Actions
 	marketplace coremarket.Manager
+	// marketplaceScreen abre a loja. Ela chega como factory, e não como item
+	// do catálogo, porque a loja não é uma tool entre as outras: é de onde as
+	// outras vêm.
+	marketplaceScreen tui.ScreenFactory
 
 	width, height int
 
@@ -64,6 +71,11 @@ type Model struct {
 	// cursor guarda a seleção de cada zona separadamente, para que trocar de
 	// painel e voltar não perca o lugar.
 	cursor [zoneCount]int
+	// drawnPanels são os painéis que o último render de fato desenhou, na
+	// ordem em que apareceram. O layout descarta painéis quando a janela
+	// encolhe e ainda os reordena; a navegação lê esta lista para nunca focar
+	// algo que o usuário não está vendo.
+	drawnPanels []zone
 
 	// Modo busca.
 	searching bool
@@ -86,7 +98,7 @@ type Model struct {
 	toast   toast
 	user    string
 
-	marketplaceTools   []coremarket.Listing
+	marketplaceCatalog coremarket.Catalog
 	marketplaceLoading bool
 	marketplaceErr     error
 }
@@ -132,6 +144,8 @@ type Config struct {
 	// Marketplace é opcional para manter a home testável e permitir que a
 	// engine inicie mesmo quando o índice público estiver indisponível.
 	Marketplace coremarket.Manager
+	// MarketplaceScreen constrói a tela da loja sob demanda.
+	MarketplaceScreen tui.ScreenFactory
 }
 
 // New monta a home. Nada é carregado aqui — a primeira carga acontece em
@@ -158,6 +172,7 @@ func New(cfg Config) *Model {
 		interactive:        cfg.Interactive,
 		hostActions:        cfg.HostActions,
 		marketplace:        cfg.Marketplace,
+		marketplaceScreen:  cfg.MarketplaceScreen,
 		input:              in,
 		catByID:            map[domain.CategoryID]domain.Category{},
 		loading:            true,
@@ -231,8 +246,8 @@ type catalogMsg struct {
 }
 
 type marketplaceMsg struct {
-	tools []coremarket.Listing
-	err   error
+	catalog coremarket.Catalog
+	err     error
 }
 
 // resultsMsg traz o resultado de uma busca, carimbado com a geração.
@@ -304,6 +319,18 @@ func (m *Model) loadCatalog() tea.Cmd {
 	}
 }
 
+// openMarketplace empilha a loja.
+//
+// Não passa por openReady porque a loja não está no catálogo: contá-la entre
+// as tools a colocaria disputando espaço com o que ela mesma instala, e
+// "recentes" acabaria dominado por ela.
+func (m *Model) openMarketplace() tea.Cmd {
+	if m.marketplaceScreen == nil {
+		return nil
+	}
+	return tui.Navigate(m.marketplaceScreen())
+}
+
 // loadMarketplace consulta apenas metadados; nenhum artefato é baixado ou
 // executado. A chamada ocorre em uma Cmd para que a rede nunca congele a Home.
 func (m *Model) loadMarketplace() tea.Cmd {
@@ -311,8 +338,8 @@ func (m *Model) loadMarketplace() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
-		tools, err := manager.List(ctx)
-		return marketplaceMsg{tools: tools, err: err}
+		catalog, err := manager.Catalog(ctx)
+		return marketplaceMsg{catalog: catalog, err: err}
 	}
 }
 

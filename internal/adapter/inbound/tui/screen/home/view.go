@@ -2,6 +2,7 @@ package home
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/component"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/core/domain"
+	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 )
 
 // Constantes de layout. São os pontos de quebra do design responsivo: cada
@@ -22,6 +24,12 @@ const (
 	panelMinWidth   = 34
 	heroMinHeight   = 28 // abaixo disso busca e catálogo têm prioridade
 	spectrumMinRows = 20
+	// marketplaceMinHeight é a altura interna a partir da qual a vitrine
+	// cabe. O modelo consulta a mesma constante para saber se a zona é
+	// alcançável pelo teclado.
+	marketplaceMinHeight = 24
+	// marketplacePanelHeight: moldura, resumo, régua e três destaques.
+	marketplacePanelHeight = 7
 )
 
 // View implementa tui.Screen.
@@ -162,8 +170,8 @@ func (m *Model) viewBrowse(th *theme.Theme, width, height int) string {
 	// A vitrine compacta torna o marketplace descobrível sem transformar a
 	// Home em uma segunda tela de catálogo. O conteúdo completo continua no
 	// painel dedicado, aberto com "m" ou pelo item da busca.
-	if m.marketplace != nil && height >= 24 {
-		market := m.viewMarketplace(th, inner, 6)
+	if m.marketplace != nil && height >= marketplaceMinHeight {
+		market := m.viewMarketplace(th, inner, marketplacePanelHeight)
 		blocks = append(blocks, "", market)
 		used += lipgloss.Height(market) + 1
 	}
@@ -181,41 +189,198 @@ func (m *Model) viewBrowse(th *theme.Theme, width, height int) string {
 	return pad.Render(lipgloss.NewStyle().Width(inner).MaxHeight(height).Render(body))
 }
 
+// viewMarketplace é a vitrine da loja. Ela não é uma lista encolhida: mostra
+// primeiro o que pede ação (atualizações), resume as origens e só então
+// preenche o espaço restante com novidades — porque o valor de um painel de
+// cinco linhas na home está em responder "preciso fazer algo?" sem que o
+// usuário abra a loja.
 func (m *Model) viewMarketplace(th *theme.Theme, width, height int) string {
-	if m.marketplaceLoading && len(m.marketplaceTools) == 0 {
-		body := th.Dim.Render("consultando o índice público…")
-		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Primary,
-			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, body))
+	tools := m.marketplaceCatalog.Tools
+	inner, rows := width-2, height-2
+	focused := m.focus == zoneMarketplace && !m.searching
+
+	// O rodapé anuncia a tecla que de fato abre a loja no estado atual: com o
+	// foco na vitrine é Enter, fora dela é o atalho global.
+	footer := "m abrir loja"
+	if focused {
+		footer = "↵ abrir loja"
 	}
-	if m.marketplaceErr != nil && len(m.marketplaceTools) == 0 {
-		body := lipgloss.NewStyle().Foreground(th.Warning).Render("índice indisponível — pressione m para tentar novamente")
-		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Warning,
-			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, component.TruncateTail(body, width-4)))
+	panel := func(accent lipgloss.TerminalColor, body string) string {
+		return component.Panel{
+			Title: "marketplace", Glyph: "✦", Accent: accent, Focused: focused,
+			Footer: footer, Width: width, Height: height,
+		}.Render(th, body)
 	}
-	if len(m.marketplaceTools) == 0 {
-		body := th.Ghost.Render("nenhuma tool publicada para esta plataforma")
-		return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Muted,
-			Width: width, Height: height, Footer: "m abrir loja"}.Render(th, component.Center(width-2, height-2, body))
+	empty := func(accent lipgloss.TerminalColor, lines ...string) string {
+		return panel(accent, component.Center(inner, rows, lines...))
 	}
 
-	limit := min(len(m.marketplaceTools), 3)
-	items := make([]string, 0, limit)
-	for _, listing := range m.marketplaceTools[:limit] {
-		state := th.Ghost.Render(listing.Version)
-		if listing.UpdateAvailable {
-			state = lipgloss.NewStyle().Foreground(th.Warning).Render("↑ atualizar")
-		} else if listing.InstalledVersion != "" {
-			state = lipgloss.NewStyle().Foreground(th.Success).Render("✓ instalada")
+	switch {
+	case m.marketplaceLoading && len(tools) == 0:
+		return empty(th.Primary, th.Dim.Render("consultando as origens de tools…"))
+	case m.marketplaceErr != nil && len(tools) == 0:
+		return empty(th.Warning,
+			lipgloss.NewStyle().Foreground(th.Warning).Render("nenhuma origem respondeu"),
+			th.Ghost.Render(openHint(focused)+" para ver o que falhou"))
+	case len(tools) == 0:
+		return empty(th.Muted,
+			th.Ghost.Render("nenhuma tool publicada para esta plataforma"),
+			th.Ghost.Render(openHint(focused)+" para cadastrar outro repositório"))
+	}
+
+	// A régua separa o resumo dos destaques. Sem ela, o painel vira quatro
+	// linhas de texto do mesmo peso e o número que importa se perde no meio.
+	lines := []string{
+		m.marketplaceSummary(th, inner),
+		th.Divider.Render(strings.Repeat("╌", inner)),
+	}
+
+	// A linha do "+ N outras" é reservada antes de escolher os destaques: sem
+	// isso, o último item ocuparia o espaço dela e o painel esconderia que há
+	// mais catálogo do que cabe.
+	budget := rows - len(lines)
+	if len(tools) > budget {
+		budget--
+	}
+	highlights := marketplaceHighlights(tools, budget)
+	for _, listing := range highlights {
+		lines = append(lines, m.marketplaceItem(th, listing, inner, focused))
+	}
+	if remaining := len(tools) - len(highlights); remaining > 0 {
+		lines = append(lines, th.Ghost.Render(component.TruncateTail(
+			fmt.Sprintf("   + %d outras no catálogo", remaining), inner)))
+	}
+
+	accent := th.Primary
+	if m.marketplaceCatalog.Degraded() {
+		accent = th.Warning
+	}
+	return panel(accent, strings.Join(lines, "\n"))
+}
+
+// countLabel evita o "1 tools" que denuncia contador montado com Sprintf.
+func countLabel(count int, singular, many string) string {
+	if count == 1 {
+		return fmt.Sprintf("%d %s", count, singular)
+	}
+	return fmt.Sprintf("%d %s", count, many)
+}
+
+// openHint nomeia a tecla que abre a loja no estado de foco atual.
+func openHint(focused bool) string {
+	if focused {
+		return "↵"
+	}
+	return "m"
+}
+
+// marketplaceSummary é a linha que carrega o estado geral da loja.
+func (m *Model) marketplaceSummary(th *theme.Theme, width int) string {
+	catalog := m.marketplaceCatalog
+	origins := 0
+	failed := 0
+	for _, status := range catalog.Sources {
+		origins++
+		if status.Err != nil {
+			failed++
 		}
-		name := th.Item.Render(marketplaceGlyph(listing.Glyph) + " " + listing.Name)
-		items = append(items, component.Spread(name, state, width-4))
 	}
-	if remaining := len(m.marketplaceTools) - limit; remaining > 0 {
-		items = append(items, th.Ghost.Render(fmt.Sprintf("+ %d outras tools disponíveis", remaining)))
+	updates := 0
+	installed := 0
+	for _, listing := range catalog.Tools {
+		if listing.UpdateAvailable {
+			updates++
+		}
+		if listing.InstalledVersion != "" {
+			installed++
+		}
 	}
-	body := strings.Join(items, "\n")
-	return component.Panel{Title: "marketplace", Glyph: "✦", Accent: th.Primary,
-		Width: width, Height: height, Footer: "m abrir loja · ↵ instalar"}.Render(th, body)
+
+	left := th.Counter.Render(countLabel(len(catalog.Tools), "tool", "tools")) +
+		th.Ghost.Render(" · ") +
+		th.Counter.Render(countLabel(origins, "origem", "origens"))
+
+	var right string
+	switch {
+	case failed > 0:
+		right = lipgloss.NewStyle().Foreground(th.Warning).
+			Render("▲ " + countLabel(failed, "origem fora do ar", "origens fora do ar"))
+	case updates > 0:
+		right = lipgloss.NewStyle().Foreground(th.Warning).Bold(true).
+			Render(fmt.Sprintf("↑ %d para atualizar", updates))
+	case installed > 0:
+		right = lipgloss.NewStyle().Foreground(th.Success).
+			Render(fmt.Sprintf("✓ %d instaladas", installed))
+	default:
+		right = th.Ghost.Render("nada instalado ainda")
+	}
+	return component.TruncateTail(component.Spread(left, right, width), width)
+}
+
+func (m *Model) marketplaceItem(th *theme.Theme, listing coremarket.Listing, width int, focused bool) string {
+	glyph := lipgloss.NewStyle().
+		Foreground(marketplaceChannelColor(th, listing.DistributionTier)).
+		Render(marketplaceGlyph(listing.Glyph))
+
+	state := th.Ghost.Render(listing.Version)
+	switch {
+	case listing.UpdateAvailable:
+		state = lipgloss.NewStyle().Foreground(th.Warning).Bold(true).Render("↑ atualizar")
+	case listing.InstalledVersion != "":
+		state = lipgloss.NewStyle().Foreground(th.Success).Render("✓ instalada")
+	}
+
+	// A origem entra apagada ao lado do nome: com repositórios paralelos, de
+	// onde a tool vem passa a ser parte da identidade dela.
+	name := th.Item.Render(listing.Name)
+	if origin := listing.Origin.Name; origin != "" {
+		name += th.Ghost.Render(" · " + origin)
+	}
+
+	// A barra à esquerda acende no bloco inteiro, não item a item: a vitrine
+	// abre a loja, não a tool sob um cursor — sugerir seleção individual
+	// prometeria uma ação que esta tela não faz.
+	marker := "   "
+	if focused {
+		marker = lipgloss.NewStyle().Foreground(th.Primary).Render("▎") + "  "
+	}
+	return component.TruncateTail(component.Spread(marker+glyph+" "+name, state, width), width)
+}
+
+// marketplaceHighlights ordena a vitrine por urgência: o que tem atualização
+// vem primeiro, depois a novidade ainda não instalada, e por último o que já
+// está em dia — que é justamente o que não precisa de atenção.
+func marketplaceHighlights(tools []coremarket.Listing, limit int) []coremarket.Listing {
+	if limit <= 0 {
+		return nil
+	}
+	ranked := slices.Clone(tools)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return marketplaceRank(ranked[i]) < marketplaceRank(ranked[j])
+	})
+	return ranked[:min(limit, len(ranked))]
+}
+
+func marketplaceRank(listing coremarket.Listing) int {
+	switch {
+	case listing.UpdateAvailable:
+		return 0
+	case listing.InstalledVersion == "":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func marketplaceChannelColor(th *theme.Theme, channel coremarket.Channel) lipgloss.TerminalColor {
+	switch channel {
+	case coremarket.ChannelOfficial:
+		return th.Primary
+	case coremarket.ChannelVerified:
+		return th.Accent
+	default:
+		return th.Secondary
+	}
 }
 
 func marketplaceGlyph(glyph string) string {
@@ -292,6 +457,7 @@ func (m *Model) viewFilter(th *theme.Theme, width, height int) string {
 	if m.filterPage.HasMore() {
 		footer = fmt.Sprintf("%d de %d", m.filterPage.Len(), m.filterPage.Total)
 	}
+	m.drawnPanels = append(m.drawnPanels[:0], zoneSuggested)
 	title, glyph, accent := m.filterPresentation(th)
 	panel := component.Panel{
 		Title:   title,
@@ -365,6 +531,7 @@ func (m *Model) viewPanels(th *theme.Theme, width, height int) string {
 	// frame — o que arrancaria a borda inferior do último painel.
 	const minPanelHeight = 5
 	if height < minPanelHeight {
+		m.drawnPanels = nil
 		return ""
 	}
 	// Cada linha extra consome uma linha de respiro entre painéis.
@@ -379,7 +546,17 @@ func (m *Model) viewPanels(th *theme.Theme, width, height int) string {
 			return len(specs[i].items) > 0 && len(specs[j].items) == 0
 		})
 	}
+	hidden := len(specs) - min(len(specs), rows*cols)
 	specs = specs[:min(len(specs), rows*cols)]
+
+	// A navegação passa a enxergar exatamente o que foi desenhado, inclusive
+	// a reordenação acima. Sem isto, o foco podia parar num painel que não
+	// coube — e as setas moviam um cursor invisível.
+	m.drawnPanels = m.drawnPanels[:0]
+	for _, spec := range specs {
+		m.drawnPanels = append(m.drawnPanels, spec.zone)
+	}
+
 	rowH := (height - (rows - 1)) / rows
 
 	renderedRows := make([]string, 0, rows)
@@ -405,7 +582,15 @@ func (m *Model) viewPanels(th *theme.Theme, width, height int) string {
 			if i == end-1 {
 				w = width - gaps - colW*(n-1)
 			}
-			blocks = append(blocks, m.viewPanel(th, specs[i], w, rowH))
+			// O aviso de painéis omitidos vai no último desenhado: é o canto
+			// mais abaixo e à direita, onde o olho já termina a varredura, e
+			// cabe na moldura sem custar uma linha de altura — que é
+			// justamente o que falta quando algo foi omitido.
+			omitted := 0
+			if i == len(specs)-1 {
+				omitted = hidden
+			}
+			blocks = append(blocks, m.viewPanel(th, specs[i], w, rowH, omitted))
 		}
 		renderedRows = append(renderedRows, lipgloss.JoinHorizontal(lipgloss.Top, blocks...))
 	}
@@ -413,8 +598,9 @@ func (m *Model) viewPanels(th *theme.Theme, width, height int) string {
 	return strings.Join(renderedRows, "\n\n")
 }
 
-// viewPanel renderiza um painel de destaque com sua lista dentro.
-func (m *Model) viewPanel(th *theme.Theme, spec panelSpec, width, height int) string {
+// viewPanel renderiza um painel de destaque com sua lista dentro. omitted, se
+// houver, anuncia quantos painéis não couberam na janela.
+func (m *Model) viewPanel(th *theme.Theme, spec panelSpec, width, height, omitted int) string {
 	focused := m.focus == spec.zone && !m.searching
 
 	// Cada item ocupa duas linhas (nome + resumo) quando há altura folgada.
@@ -435,6 +621,13 @@ func (m *Model) viewPanel(th *theme.Theme, spec panelSpec, width, height int) st
 	footer := ""
 	if n := len(spec.items); n > 0 {
 		footer = fmt.Sprintf("%d", n)
+	}
+	if omitted > 0 {
+		hint := countLabel(omitted, "painel oculto", "painéis ocultos")
+		if footer != "" {
+			hint = footer + " · " + hint
+		}
+		footer = hint
 	}
 
 	return component.Panel{

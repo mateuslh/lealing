@@ -16,9 +16,11 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/outbound/search"
 	"github.com/mateuslh/lealing/internal/catalog"
 	"github.com/mateuslh/lealing/internal/core/domain"
+	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 )
 
 // Estes testes montam o caminho real — registry, buscador fuzzy e serviço —
@@ -507,25 +509,29 @@ func TestHomeExpoeRefresh(t *testing.T) {
 	var _ interface{ Refresh() tea.Cmd } = (*Model)(nil)
 }
 
+// A loja não está no catálogo: ela chega por uma factory própria, e é o
+// atalho da home que a abre.
 func TestAtalhoMarketplaceAbreTelaDedicada(t *testing.T) {
-	m := newTestModelWith(t, tui.Screens{"marketplace": func() tui.Screen { return stubScreen{} }})
+	m := newTestModelWith(t, nil)
+	m.marketplaceScreen = func() tui.Screen { return stubScreen{} }
+
 	_, cmd := press(t, m, "m")
 	if cmd == nil {
 		t.Fatal("atalho m não produziu navegação")
 	}
-	msg := cmd()
-	batch, ok := msg.(tea.BatchMsg)
-	if !ok {
-		t.Fatalf("atalho m devolveu %T, quero BatchMsg", msg)
+	nav, ok := cmd().(tui.NavigateMsg)
+	if !ok || nav.Screen.ID() != "stub" {
+		t.Fatalf("atalho m devolveu %T", nav.Screen)
 	}
-	for _, command := range batch {
-		if next := command(); next != nil {
-			if nav, ok := next.(tui.NavigateMsg); ok && nav.Screen.ID() == "stub" {
-				return
-			}
-		}
+}
+
+// Sem factory ligada, o atalho não pode explodir: a engine precisa abrir
+// mesmo quando o marketplace não foi composto.
+func TestAtalhoMarketplaceSemFactoryNaoQuebra(t *testing.T) {
+	m := newTestModelWith(t, nil)
+	if _, cmd := press(t, m, "m"); cmd != nil {
+		t.Fatalf("atalho m produziu %T sem factory", cmd())
 	}
-	t.Fatal("atalho m não abriu a tela do marketplace")
 }
 
 type requirementCheckerStub struct{ missing []domain.Requirement }
@@ -572,5 +578,230 @@ func TestToolComRequisitoAusenteAbreDiagnostico(t *testing.T) {
 	}
 	if !strings.Contains(string(nav.Screen.ID()), "requirements") {
 		t.Fatalf("tela = %s", nav.Screen.ID())
+	}
+}
+
+// fakeMarketplace alimenta a vitrine sem rede. Só Catalog importa aqui: a
+// home nunca instala nem mexe em origens — ela apenas mostra e encaminha.
+type fakeMarketplace struct{ catalog coremarket.Catalog }
+
+func (f fakeMarketplace) Catalog(context.Context) (coremarket.Catalog, error) {
+	return f.catalog, nil
+}
+func (f fakeMarketplace) List(context.Context) ([]coremarket.Listing, error) {
+	return f.catalog.Tools, nil
+}
+func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installation, error) {
+	return toolinstall.Installation{}, nil
+}
+func (fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) { return nil, nil }
+func (fakeMarketplace) AddSource(context.Context, coremarket.Origin) error   { return nil }
+func (fakeMarketplace) RemoveSource(context.Context, string) error           { return nil }
+func (fakeMarketplace) SetSourceEnabled(context.Context, string, bool) error { return nil }
+
+func marketListing(id, name string, installed string, update bool) coremarket.Listing {
+	return coremarket.Listing{
+		Entry: coremarket.Entry{
+			ID: id, Name: name, Version: "2.0.0", Glyph: "◈",
+			Summary:          "Resumo de " + name + ".",
+			DistributionTier: coremarket.ChannelCommunity,
+			Origin:           coremarket.Origin{Name: "meu-repo", Kind: coremarket.OriginLocal},
+		},
+		InstalledVersion: installed,
+		UpdateAvailable:  update,
+	}
+}
+
+// loadVitrine roda a carga do marketplace de forma síncrona.
+func loadVitrine(t *testing.T, catalog coremarket.Catalog) *Model {
+	t.Helper()
+	m := newTestModelWith(t, nil)
+	m.marketplace = fakeMarketplace{catalog: catalog}
+	next, _ := m.Update(m.loadMarketplace()())
+	return next.(*Model)
+}
+
+func TestVitrineDestacaOQuePedeAcaoAntesDoRestante(t *testing.T) {
+	m := loadVitrine(t, coremarket.Catalog{
+		Tools: []coremarket.Listing{
+			marketListing("em-dia", "Em Dia", "2.0.0", false),
+			marketListing("nova", "Nova", "", false),
+			marketListing("desatualizada", "Desatualizada", "1.0.0", true),
+			marketListing("outra-nova", "Outra Nova", "", false),
+		},
+		Sources: []coremarket.SourceStatus{{Origin: coremarket.Origin{Name: "meu-repo"}, Tools: 4}},
+	})
+
+	view := m.viewMarketplace(m.deps.Theme, 70, 6)
+	desatualizada := strings.Index(view, "Desatualizada")
+	emDia := strings.Index(view, "Em Dia")
+	switch {
+	case desatualizada < 0:
+		t.Fatalf("a tool com atualização não apareceu na vitrine:\n%s", view)
+	case emDia >= 0 && emDia < desatualizada:
+		t.Fatalf("o que já está em dia passou na frente da atualização:\n%s", view)
+	}
+	if !strings.Contains(view, "1 para atualizar") {
+		t.Fatalf("o resumo não anunciou a atualização:\n%s", view)
+	}
+	if !strings.Contains(view, "outras no catálogo") {
+		t.Fatalf("a vitrine escondeu o que não coube:\n%s", view)
+	}
+}
+
+func TestVitrineAnunciaOrigemForaDoArSemEsconderOCatalogo(t *testing.T) {
+	m := loadVitrine(t, coremarket.Catalog{
+		Tools: []coremarket.Listing{marketListing("nova", "Nova", "", false)},
+		Sources: []coremarket.SourceStatus{
+			{Origin: coremarket.Origin{Name: "meu-repo"}, Tools: 1},
+			{Origin: coremarket.Origin{Name: "offline"}, Err: context.DeadlineExceeded},
+		},
+	})
+
+	view := m.viewMarketplace(m.deps.Theme, 70, 6)
+	if !strings.Contains(view, "Nova") {
+		t.Fatalf("a tool da origem saudável sumiu:\n%s", view)
+	}
+	if !strings.Contains(view, "1 origem fora do ar") {
+		t.Fatalf("a origem indisponível não foi anunciada:\n%s", view)
+	}
+}
+
+// A vitrine é alcançável pelo teclado e abre com Enter — sem depender do
+// atalho global, que ninguém descobre sozinho.
+func TestVitrineRecebeFocoEAbreComEnter(t *testing.T) {
+	m := loadVitrine(t, coremarket.Catalog{
+		Tools: []coremarket.Listing{marketListing("nova", "Nova", "", false)},
+	})
+	m.marketplaceScreen = func() tui.Screen { return stubScreen{} }
+	m.width, m.height = 150, 44
+
+	// Descer da busca leva à vitrine antes dos painéis de destaque.
+	m.focus = zoneSearch
+	m, _ = press(t, m, "down")
+	if m.focus != zoneMarketplace {
+		t.Fatalf("foco = %v, quero a vitrine", m.focus)
+	}
+	if view := m.viewMarketplace(m.deps.Theme, 70, marketplacePanelHeight); !strings.Contains(view, "↵ abrir loja") {
+		t.Fatalf("a vitrine focada não anunciou o Enter:\n%s", view)
+	}
+
+	_, cmd := press(t, m, "enter")
+	if cmd == nil {
+		t.Fatal("Enter na vitrine não abriu a loja")
+	}
+	if nav, ok := cmd().(tui.NavigateMsg); !ok || nav.Screen.ID() != "stub" {
+		t.Fatalf("Enter devolveu %T", cmd())
+	}
+
+	// E continua saindo: descer entrega o foco aos destaques.
+	m, _ = press(t, m, "down")
+	if m.focus == zoneMarketplace {
+		t.Fatal("a vitrine prendeu o foco")
+	}
+}
+
+// Quando a vitrine não está desenhada, o foco não pode ficar preso nela.
+func TestFocoSaiDaVitrineQuandoElaNaoCabe(t *testing.T) {
+	m := loadVitrine(t, coremarket.Catalog{
+		Tools: []coremarket.Listing{marketListing("nova", "Nova", "", false)},
+	})
+	m.width, m.height = 150, 44
+	m.focus = zoneMarketplace
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 150, Height: 20})
+	if got := next.(*Model).focus; got == zoneMarketplace {
+		t.Fatalf("foco continuou na vitrine em janela baixa: %v", got)
+	}
+}
+
+// panelTitles lê da tela quais painéis de destaque foram desenhados. O teste
+// confere contra o render de verdade, e não contra o cálculo do layout: era
+// justamente a divergência entre os dois que produzia o bug.
+func panelTitles(view string) map[zone]bool {
+	drawn := map[zone]bool{}
+	for title, z := range map[string]zone{
+		"FAVORITAS": zoneFavorites, "RECENTES": zoneRecent, "SUGERIDAS": zoneSuggested,
+	} {
+		if strings.Contains(view, title) {
+			drawn[z] = true
+		}
+	}
+	return drawn
+}
+
+// Numa janela baixa o layout descarta painéis. O foco não pode continuar em
+// um deles: as setas moveriam um cursor que ninguém vê.
+func TestFocoNaoFicaEmPainelQueNaoCoubeNaTela(t *testing.T) {
+	// Nesta altura só "sugeridas" cabe; favoritas e recentes ficam de fora.
+	const width, height = 60, 14
+	m := newTestModel(t)
+	m.width, m.height = width, height
+	m.focus = zoneRecent
+
+	drawn := panelTitles(m.View(tui.Frame{Width: width, Height: height}))
+	if drawn[zoneRecent] || len(drawn) == 0 {
+		t.Fatalf("geometria inesperada: desenhados = %v", drawn)
+	}
+
+	m, _ = press(t, m, "down")
+	if !drawn[m.focus] {
+		t.Fatalf("foco = %v, mas os painéis desenhados são %v", m.focus, drawn)
+	}
+}
+
+// O Enter também não pode abrir a tool de um painel invisível.
+func TestEnterNaoAbreToolDePainelInvisivel(t *testing.T) {
+	const width, height = 60, 14
+	m := newTestModel(t)
+	m.width, m.height = width, height
+	m.focus = zoneFavorites
+
+	drawn := panelTitles(m.View(tui.Frame{Width: width, Height: height}))
+	if drawn[zoneFavorites] {
+		t.Fatalf("geometria inesperada: favoritas foi desenhada")
+	}
+
+	m, _ = press(t, m, "enter")
+	if m.focus == zoneFavorites {
+		t.Fatal("o foco continuou no painel que não foi desenhado")
+	}
+}
+
+// Em janela larga os três painéis continuam alcançáveis: a correção não pode
+// encolher a navegação normal.
+func TestJanelaGrandeMantemOsTresPaineisNavegaveis(t *testing.T) {
+	m := newTestModel(t)
+	m.width, m.height = 200, 60
+	_ = m.View(tui.Frame{Width: 200, Height: 60})
+
+	visited := map[zone]bool{}
+	for range 6 {
+		m.cycleZone(1)
+		visited[m.focus] = true
+	}
+	for _, z := range panelZones {
+		if !visited[z] {
+			t.Fatalf("zona %v ficou fora do ciclo do Tab: %v", z, visited)
+		}
+	}
+}
+
+// Sumir com um painel em silêncio é o que fazia a home parecer incompleta
+// sem explicação. A moldura do último painel anuncia o que ficou de fora.
+func TestPaineisOmitidosSaoAnunciadosNaMoldura(t *testing.T) {
+	const width, height = 60, 14
+	m := newTestModel(t)
+	m.width, m.height = width, height
+
+	view := m.View(tui.Frame{Width: width, Height: height})
+	if !strings.Contains(view, "painéis ocultos") {
+		t.Fatalf("a home escondeu painéis sem avisar:\n%s", view)
+	}
+
+	// Na janela larga, onde tudo cabe, o aviso não aparece.
+	m.width, m.height = 200, 60
+	if wide := m.View(tui.Frame{Width: 200, Height: 60}); strings.Contains(wide, "oculto") {
+		t.Fatalf("aviso de painel oculto apareceu com a janela cheia:\n%s", wide)
 	}
 }
