@@ -89,7 +89,11 @@ func run() error {
 		return fmt.Errorf("use apenas um comando de conta por vez")
 	}
 	if syncCommands == 1 {
-		return runSyncCommand(context.Background(), bootstrap.SyncManager(version), os.Stdout, syncCommand{
+		manager, err := bootstrap.SyncManager(version)
+		if err != nil {
+			return err
+		}
+		return runSyncCommand(context.Background(), manager, os.Stdout, syncCommand{
 			login: *login, logout: *logout,
 			push: *syncPush, pull: *syncPull, status: *syncStatus, force: *syncForce,
 		})

@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -59,6 +60,9 @@ type Model struct {
 	// do catálogo, porque a loja não é uma tool entre as outras: é de onde as
 	// outras vêm.
 	marketplaceScreen tui.ScreenFactory
+	// settingsScreen abre a configuração da engine, pelo mesmo motivo:
+	// configurar o lealing não é usar uma tool do lealing.
+	settingsScreen tui.ScreenFactory
 
 	width, height int
 
@@ -97,6 +101,11 @@ type Model struct {
 	err     error
 	toast   toast
 	user    string
+	// greetingName e marketplaceOnHome são consultados a cada uso, e não
+	// lidos na construção, porque a tela de configuração muda os dois e o
+	// usuário volta para cá esperando ver o efeito.
+	greetingName      func() string
+	marketplaceOnHome func() bool
 
 	marketplaceCatalog coremarket.Catalog
 	marketplaceLoading bool
@@ -146,6 +155,13 @@ type Config struct {
 	Marketplace coremarket.Manager
 	// MarketplaceScreen constrói a tela da loja sob demanda.
 	MarketplaceScreen tui.ScreenFactory
+	// SettingsScreen constrói a tela de configuração sob demanda.
+	SettingsScreen tui.ScreenFactory
+	// GreetingName resolve o nome da saudação a cada render, para que
+	// trocá-lo na configuração valha sem reiniciar.
+	GreetingName func() string
+	// MarketplaceOnHome decide se a vitrine consulta a rede ao carregar.
+	MarketplaceOnHome func() bool
 }
 
 // New monta a home. Nada é carregado aqui — a primeira carga acontece em
@@ -173,6 +189,9 @@ func New(cfg Config) *Model {
 		hostActions:        cfg.HostActions,
 		marketplace:        cfg.Marketplace,
 		marketplaceScreen:  cfg.MarketplaceScreen,
+		settingsScreen:     cfg.SettingsScreen,
+		greetingName:       cfg.GreetingName,
+		marketplaceOnHome:  cfg.MarketplaceOnHome,
 		input:              in,
 		catByID:            map[domain.CategoryID]domain.Category{},
 		loading:            true,
@@ -194,7 +213,7 @@ func (m *Model) Title() string { return "home" }
 // Init implementa tui.Screen.
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.loadCatalog(), tick()}
-	if m.marketplace != nil {
+	if m.marketplaceEnabled() {
 		cmds = append(cmds, m.loadMarketplace())
 	}
 	return tea.Batch(cmds...)
@@ -204,7 +223,7 @@ func (m *Model) Init() tea.Cmd {
 // da home nunca parou, e um segundo ticker faria o toast expirar cedo demais.
 func (m *Model) Refresh() tea.Cmd {
 	cmds := []tea.Cmd{m.loadCatalog()}
-	if m.marketplace != nil {
+	if m.marketplaceEnabled() {
 		cmds = append(cmds, m.loadMarketplace())
 	}
 	return tea.Batch(cmds...)
@@ -317,6 +336,29 @@ func (m *Model) loadCatalog() tea.Cmd {
 		}
 		return catalogMsg{highlights: hl, categories: cats}
 	}
+}
+
+// openSettings empilha a configuração da engine.
+func (m *Model) openSettings() tea.Cmd {
+	if m.settingsScreen == nil {
+		return nil
+	}
+	return tui.Navigate(m.settingsScreen())
+}
+
+// userName resolve o nome da saudação, com o do sistema como plano B.
+func (m *Model) userName() string {
+	if m.greetingName != nil {
+		if name := strings.TrimSpace(m.greetingName()); name != "" {
+			return name
+		}
+	}
+	return m.user
+}
+
+// marketplaceEnabled informa se a vitrine pode falar com a rede.
+func (m *Model) marketplaceEnabled() bool {
+	return m.marketplace != nil && (m.marketplaceOnHome == nil || m.marketplaceOnHome())
 }
 
 // openMarketplace empilha a loja.

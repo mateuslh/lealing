@@ -22,6 +22,7 @@ import (
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	powerscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
+	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
 	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	usersyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/usersync"
@@ -43,6 +44,7 @@ import (
 	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
+	"github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/sdk/protocol"
@@ -85,6 +87,12 @@ func Wire(opts Options) (*App, error) {
 	platform := currentPlatform()
 	directories := directoriesFor(platform)
 
+	// A configuração é lida antes de tudo: ela decide o índice do
+	// marketplace, o app do GitHub e o que a home consulta ao abrir. Um erro
+	// de leitura não impede a engine de subir — os padrões valem e a tela de
+	// configuração mostra a falha —, mas é registrado no log.
+	config, configErr := newSettings(directories, opts.Version)
+
 	// --- Infraestrutura ---
 	log := outbound.Logger(logging.NewDiscard())
 	if !opts.Ephemeral {
@@ -100,6 +108,9 @@ func Wire(opts Options) (*App, error) {
 		}
 		log = fileLog
 		app.closers = append(app.closers, fileLog.Close)
+	}
+	if configErr != nil {
+		log.Warn("configuração não pôde ser lida; usando os padrões", "erro", configErr)
 	}
 
 	// --- Adapters de saída ---
@@ -146,8 +157,15 @@ func Wire(opts Options) (*App, error) {
 	catalogSvc := service.NewCatalog(repo, search.NewFuzzy(), usageStore, clock)
 	prerequisites := service.NewPrerequisites(repo, requirements.NewPathChecker())
 	toolManager := newToolManager(directories.Tools)
+	// A flag continua vencendo a configuração: quem passou -marketplace-url
+	// está testando outro registry agora, e o valor gravado é a preferência
+	// de sempre.
+	indexURL := opts.MarketplaceURL
+	if indexURL == "" || indexURL == DefaultMarketplaceURL {
+		indexURL = config.String(settings.KeyMarketplaceIndex)
+	}
 	marketplaceSvc := newMarketplaceManager(
-		opts.Version, opts.MarketplaceURL, toolManager, repo, directories,
+		opts.Version, indexURL, toolManager, repo, directories,
 	)
 
 	// A sincronização fica de fora da sessão efêmera: ela existe para
@@ -155,7 +173,7 @@ func Wire(opts Options) (*App, error) {
 	// não persistir em disco seria contrariar a própria flag.
 	var syncSvc usersync.Manager
 	if !opts.Ephemeral {
-		syncSvc = newSyncManager(opts.Version, directories,
+		syncSvc = newSyncManager(opts.Version, directories, config,
 			usageStore, marketplaceSourceStore(directories), toolManager)
 	}
 
@@ -260,9 +278,16 @@ func Wire(opts Options) (*App, error) {
 		Interactive:   interactiveTools,
 		HostActions:   hostActions,
 		Marketplace:   marketplaceSvc,
+		GreetingName: func() string {
+			return config.String(settings.KeyGreetingName)
+		},
+		MarketplaceOnHome: func() bool {
+			return config.Bool(settings.KeyMarketplaceOnHome)
+		},
 		// A loja não entra em `screens`: ela não é uma tool do catálogo, e sim
 		// a porta por onde as tools chegam. A home a abre pela vitrine.
 		MarketplaceScreen: func() tui.Screen { return marketplacescreen.New(deps, marketplaceSvc) },
+		SettingsScreen:    func() tui.Screen { return settingsscreen.New(deps, config) },
 	})
 
 	app.ui = tui.NewApp(th, root)

@@ -38,9 +38,11 @@ type HTTPClient interface {
 
 type Config struct {
 	Client HTTPClient
-	// ClientID é o OAuth App registrado pelo mantenedor. Sem ele o recurso
-	// fica desligado em vez de falhar no meio do fluxo.
-	ClientID string
+	// ClientID resolve o OAuth App a cada chamada. É função, e não valor,
+	// para que trocá-lo na tela de configuração valha no login seguinte sem
+	// reiniciar a engine. Sem app configurado o recurso fica desligado em vez
+	// de falhar no meio do fluxo.
+	ClientID func() string
 	// Endpoints são sobrescritos apenas em teste.
 	DeviceURL, TokenURL, IdentityURL string
 	// MinInterval protege o servidor de um polling agressivo se ele devolver
@@ -49,6 +51,14 @@ type Config struct {
 }
 
 type Client struct{ config Config }
+
+// clientID lê o app configurado agora, tolerando a ausência do resolvedor.
+func (c *Client) clientID() string {
+	if c.config.ClientID == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.config.ClientID())
+}
 
 var _ usersync.Authenticator = (*Client)(nil)
 
@@ -87,12 +97,13 @@ type deviceResponse struct {
 }
 
 func (c *Client) RequestDevice(ctx context.Context) (usersync.DeviceCode, error) {
-	if strings.TrimSpace(c.config.ClientID) == "" {
+	clientID := c.clientID()
+	if clientID == "" {
 		return usersync.DeviceCode{}, ErrNotConfigured
 	}
 	var parsed deviceResponse
 	if err := c.form(ctx, c.config.DeviceURL, url.Values{
-		"client_id": {c.config.ClientID},
+		"client_id": {clientID},
 		"scope":     {scope},
 	}, &parsed); err != nil {
 		return usersync.DeviceCode{}, err
@@ -134,7 +145,8 @@ type tokenResponse struct {
 // GitHub responde slow_down quando julgamos rápido demais, e ignorar isso
 // leva a bloqueio temporário do app inteiro — não só desta sessão.
 func (c *Client) Wait(ctx context.Context, code usersync.DeviceCode) (usersync.Credential, error) {
-	if strings.TrimSpace(c.config.ClientID) == "" {
+	clientID := c.clientID()
+	if clientID == "" {
 		return usersync.Credential{}, ErrNotConfigured
 	}
 	interval := code.Interval
@@ -156,7 +168,7 @@ func (c *Client) Wait(ctx context.Context, code usersync.DeviceCode) (usersync.C
 
 		var parsed tokenResponse
 		if err := c.form(ctx, c.config.TokenURL, url.Values{
-			"client_id":   {c.config.ClientID},
+			"client_id":   {clientID},
 			"device_code": {code.Code},
 			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		}, &parsed); err != nil {

@@ -805,3 +805,49 @@ func TestPaineisOmitidosSaoAnunciadosNaMoldura(t *testing.T) {
 		t.Fatalf("aviso de painel oculto apareceu com a janela cheia:\n%s", wide)
 	}
 }
+
+// O atalho c abre a configuração, que também não é uma tool do catálogo.
+func TestAtalhoConfiguracaoAbreTelaDedicada(t *testing.T) {
+	m := newTestModelWith(t, nil)
+	m.settingsScreen = func() tui.Screen { return stubScreen{} }
+
+	_, cmd := press(t, m, "c")
+	if cmd == nil {
+		t.Fatal("atalho c não produziu navegação")
+	}
+	if nav, ok := cmd().(tui.NavigateMsg); !ok || nav.Screen.ID() != "stub" {
+		t.Fatalf("atalho c devolveu %T", cmd())
+	}
+
+	sem := newTestModelWith(t, nil)
+	if _, cmd := press(t, sem, "c"); cmd != nil {
+		t.Fatalf("atalho c produziu %T sem factory", cmd())
+	}
+}
+
+// A saudação e a consulta da vitrine são lidas a cada uso, para que mudá-las
+// na configuração valha ao voltar para a home.
+func TestConfiguracaoMudaSaudacaoEConsultaSemReiniciar(t *testing.T) {
+	name := "Chefia"
+	consulta := false
+	m := newTestModelWith(t, nil)
+	m.marketplace = fakeMarketplace{}
+	m.greetingName = func() string { return name }
+	m.marketplaceOnHome = func() bool { return consulta }
+
+	if !strings.Contains(m.View(tui.Frame{Width: 150, Height: 44}), "Chefia") {
+		t.Fatal("a saudação não usou o nome configurado")
+	}
+	name = "Outro"
+	if !strings.Contains(m.View(tui.Frame{Width: 150, Height: 44}), "Outro") {
+		t.Fatal("a saudação não acompanhou a mudança")
+	}
+
+	if m.marketplaceEnabled() {
+		t.Fatal("a vitrine consultou a rede com o interruptor desligado")
+	}
+	consulta = true
+	if !m.marketplaceEnabled() {
+		t.Fatal("a vitrine não voltou a consultar quando religada")
+	}
+}

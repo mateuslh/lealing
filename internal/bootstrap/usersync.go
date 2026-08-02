@@ -9,23 +9,28 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/outbound/githubauth"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/githubstate"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/persistence"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/settingsstore"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/usersyncstore"
 	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
+	"github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 	"github.com/mateuslh/lealing/internal/platform/secrets"
 	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
 
-// githubClientID é o OAuth App usado no device flow.
+// githubClientID é o OAuth App do lealing no device flow.
 //
-// Fica vazio no código e é injetado no build com
-// -ldflags "-X ...bootstrap.githubClientID=Iv1.xxxx", porque cada fork
-// precisa registrar o próprio app: um client_id compartilhado faria todo
-// mundo aparecer como o mesmo aplicativo na página de autorizações do
-// usuário. A variável de ambiente cobre o desenvolvimento local.
-var githubClientID = ""
+// Fica no código de propósito. No device flow não existe segredo de cliente
+// — é justamente o que o torna adequado a um binário distribuído —, e este
+// valor já viaja dentro de todo binário publicado, ao alcance de um
+// `strings`. Deixá-lo só no -ldflags quebrava o build local, o `go install`
+// e o wrapper do `make install`, que é como a engine roda no dia a dia.
+//
+// Um fork sobrescreve com -ldflags ou com LEALING_GITHUB_CLIENT_ID para que
+// seus usuários não apareçam como este aplicativo na página de autorizações.
+var githubClientID = "Ov23liI8rDaUJ7L0Ac93"
 
 // SyncSettingsFileName guarda os ajustes de sincronização desta máquina.
 const SyncSettingsFileName = "sync.json"
@@ -34,29 +39,48 @@ const SyncSettingsFileName = "sync.json"
 // contas usa: apagar um não pode levar o outro junto.
 const secretService = "lealing-sync"
 
-// GitHubClientID resolve o app do build, com a variável de ambiente na
-// frente para quem está desenvolvendo.
-func GitHubClientID() string {
-	if fromEnv := os.Getenv("LEALING_GITHUB_CLIENT_ID"); fromEnv != "" {
-		return fromEnv
-	}
-	return githubClientID
+// SettingsFileName guarda os ajustes que o usuário mudou.
+const SettingsFileName = "settings.json"
+
+// newSettings monta a configuração da engine com os padrões que só o
+// composition root conhece e as linhas de ambiente que a tela exibe.
+func newSettings(directories xdg.Directories, engineVersion string) (*settings.Service, error) {
+	return settings.NewService(settings.Config{
+		Store: settingsstore.New(filepath.Join(directories.Config, SettingsFileName)),
+		Defaults: map[settings.Key]string{
+			settings.KeyGitHubClientID:   githubClientID,
+			settings.KeyMarketplaceIndex: DefaultMarketplaceURL,
+		},
+		Lookup: os.LookupEnv,
+		Rows: []settings.InfoRow{
+			{Section: settings.SectionEnvironment.ID, Label: "versão", Value: engineVersion},
+			{Section: settings.SectionEnvironment.ID, Label: "configuração", Value: directories.Config},
+			{Section: settings.SectionEnvironment.ID, Label: "dados", Value: directories.Data},
+			{Section: settings.SectionEnvironment.ID, Label: "cache", Value: directories.Cache},
+			{Section: settings.SectionEnvironment.ID, Label: "tools", Value: directories.Tools},
+		},
+	})
 }
 
 // SyncManager compõe a sincronização para a CLI, sem TUI por perto.
-func SyncManager(engineVersion string) usersync.Manager {
+func SyncManager(engineVersion string) (usersync.Manager, error) {
 	platform := currentPlatform()
 	directories := directoriesFor(platform)
+	config, err := newSettings(directories, engineVersion)
+	if err != nil {
+		return nil, err
+	}
 	usage := persistence.NewUsageFile(
 		filepath.Join(directories.Data, UsageFileName), usageDebounce)
 	defer usage.Close()
-	return newSyncManager(engineVersion, directories,
-		usage, marketplaceSourceStore(directories), newToolManager(directories.Tools))
+	return newSyncManager(engineVersion, directories, config,
+		usage, marketplaceSourceStore(directories), newToolManager(directories.Tools)), nil
 }
 
 func newSyncManager(
 	engineVersion string,
 	directories xdg.Directories,
+	config *settings.Service,
 	usage outbound.UsageStore,
 	sources marketplace.SourceStore,
 	installed toolinstall.Manager,
@@ -65,7 +89,7 @@ func newSyncManager(
 	return usersync.NewService(usersync.Config{
 		Auth: githubauth.New(githubauth.Config{
 			Client:   client,
-			ClientID: GitHubClientID(),
+			ClientID: func() string { return config.String(settings.KeyGitHubClientID) },
 		}),
 		Tokens: usersyncstore.NewTokens(
 			secrets.New(secretService, directories.Data),

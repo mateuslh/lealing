@@ -26,6 +26,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/requirements"
+	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	usersyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/usersync"
@@ -39,6 +40,7 @@ import (
 	corepower "github.com/mateuslh/lealing/internal/core/power"
 	corerepoclone "github.com/mateuslh/lealing/internal/core/repoclone"
 	coreselfupdate "github.com/mateuslh/lealing/internal/core/selfupdate"
+	coresettings "github.com/mateuslh/lealing/internal/core/settings"
 	coresysinfo "github.com/mateuslh/lealing/internal/core/sysinfo"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	coreusersync "github.com/mateuslh/lealing/internal/core/usersync"
@@ -479,6 +481,16 @@ var cases = append([]screenCase{
 		build: func(t *testing.T) tui.Screen { return settle(t, usersyncScreen(disconnect)) },
 	},
 	{
+		name:  "configuração",
+		build: func(t *testing.T) tui.Screen { return settle(t, settingsScreen()) },
+		keys:  []string{"right"},
+	},
+	{
+		name:  "configuração em edição",
+		build: func(t *testing.T) tui.Screen { return settle(t, settingsScreen()) },
+		keys:  []string{"right", "enter"},
+	},
+	{
 		name: "confirmação global",
 		build: func(t *testing.T) tui.Screen {
 			return confirmation.New(deps(), domain.Tool{
@@ -909,4 +921,46 @@ func usersyncScreen(mutations ...func(*coreusersync.Status)) tui.Screen {
 		mutate(&status)
 	}
 	return usersyncscreen.New(deps(), fakeUserSync{status: status}, nil, fixedNow)
+}
+
+// fakeSettings serve o catálogo real de campos: a tela é uma projeção do que
+// o core declara, então o teste de geometria precisa do conjunto verdadeiro.
+type fakeSettings struct{ rows []coresettings.InfoRow }
+
+func (fakeSettings) All() ([]coresettings.Value, error) {
+	fields := coresettings.Fields()
+	values := make([]coresettings.Value, 0, len(fields))
+	for index, field := range fields {
+		value := coresettings.Value{Field: field, Current: field.Default}
+		if index == 0 {
+			// Um valor longo de verdade: é o que estoura a coluna quando o
+			// truncamento erra.
+			value.Current = "https://raw.githubusercontent.com/mateuslh/lealing-tools/main/marketplace/index.json"
+			value.Source = coresettings.SourceUser
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (f fakeSettings) Get(key coresettings.Key) (coresettings.Value, error) {
+	values, _ := f.All()
+	for _, value := range values {
+		if value.Key == key {
+			return value, nil
+		}
+	}
+	return coresettings.Value{}, coresettings.ErrUnknownField
+}
+
+func (fakeSettings) Set(coresettings.Key, string) error { return nil }
+func (fakeSettings) Reset(coresettings.Key) error       { return nil }
+func (f fakeSettings) Info() []coresettings.InfoRow     { return f.rows }
+
+func settingsScreen() tui.Screen {
+	return settingsscreen.New(deps(), fakeSettings{rows: []coresettings.InfoRow{
+		{Section: coresettings.SectionEnvironment.ID, Label: "versão", Value: "v0.4.0"},
+		{Section: coresettings.SectionEnvironment.ID, Label: "configuração", Value: "/Users/alguem/.config/lealing"},
+		{Section: coresettings.SectionEnvironment.ID, Label: "tools", Value: "/Users/alguem/.local/share/lealing/tools"},
+	}})
 }

@@ -407,7 +407,7 @@ func (m *Model) viewHero(th *theme.Theme, width, height int) string {
 	}
 
 	hero := component.Hero{
-		Greeting: greeting(m.now(), m.user),
+		Greeting: greeting(m.now(), m.userName()),
 		Tagline:  "seu centro de comando no terminal",
 		Stats:    stats,
 	}
@@ -742,6 +742,7 @@ func (m *Model) Hints() []tui.Hint {
 	return []tui.Hint{
 		{Key: "/", Label: "buscar"},
 		{Key: "m", Label: "marketplace"},
+		{Key: "c", Label: "configuração"},
 		{Key: "↵", Label: "abrir"},
 		{Key: "f", Label: "favoritar"},
 		{Key: "↹", Label: "painel"},

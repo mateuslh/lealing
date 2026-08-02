@@ -1,0 +1,174 @@
+// Package settings implementa a tela de configuração da engine.
+//
+// A tela não conhece nenhum ajuste em particular: ela desenha o catálogo de
+// campos que o core declara. Adicionar uma configuração nova é acrescentar um
+// Field lá — nenhuma linha aqui.
+package settings
+
+import (
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	core "github.com/mateuslh/lealing/internal/core/settings"
+)
+
+// ScreenID identifica a tela na navegação.
+const ScreenID tui.ScreenID = "engine/settings"
+
+// zone é a coluna que detém o teclado.
+type zone uint8
+
+const (
+	zoneSections zone = iota
+	zoneFields
+)
+
+type Model struct {
+	deps    tui.Deps
+	manager core.Manager
+
+	sections []core.Section
+	values   []core.Value
+	info     []core.InfoRow
+
+	focus     zone
+	section   int
+	field     int
+	editing   bool
+	input     textinput.Model
+	restarted map[core.Key]bool
+
+	err     error
+	message string
+	success bool
+}
+
+var _ tui.Screen = (*Model)(nil)
+
+func New(deps tui.Deps, manager core.Manager) *Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 256
+
+	return &Model{
+		deps: deps, manager: manager, input: input,
+		sections: core.Sections(), restarted: map[core.Key]bool{},
+	}
+}
+
+func (*Model) ID() tui.ScreenID { return ScreenID }
+func (*Model) Title() string    { return "configuração" }
+
+func (m *Model) Init() tea.Cmd { return m.reload() }
+
+// Capturing impede que os atalhos globais consumam letras do campo em edição.
+func (m *Model) Capturing() bool { return m.editing }
+
+type loadedMsg struct {
+	values []core.Value
+	info   []core.InfoRow
+	err    error
+}
+
+// savedMsg fecha o ciclo de uma escrita. A recarga vem depois dela para que a
+// tela nunca mostre um valor que o disco recusou.
+type savedMsg struct {
+	key     core.Key
+	message string
+	err     error
+	restart bool
+}
+
+func (m *Model) reload() tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if manager == nil {
+			return loadedMsg{err: errNotConfigured}
+		}
+		values, err := manager.All()
+		return loadedMsg{values: values, info: manager.Info(), err: err}
+	}
+}
+
+func (m *Model) save(key core.Key, value string, restart bool) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.Set(key, value); err != nil {
+			return savedMsg{key: key, err: err}
+		}
+		return savedMsg{key: key, message: "ajuste salvo", restart: restart}
+	}
+}
+
+func (m *Model) reset(key core.Key, restart bool) tea.Cmd {
+	manager := m.manager
+	return func() tea.Msg {
+		if err := manager.Reset(key); err != nil {
+			return savedMsg{key: key, err: err}
+		}
+		return savedMsg{key: key, message: "voltou ao padrão", restart: restart}
+	}
+}
+
+// sectionFields recorta os campos da seção selecionada, preservando a ordem
+// declarada no core.
+func (m *Model) sectionFields() []core.Value {
+	section, ok := m.currentSection()
+	if !ok {
+		return nil
+	}
+	fields := make([]core.Value, 0, len(m.values))
+	for _, value := range m.values {
+		if value.Section == section.ID {
+			fields = append(fields, value)
+		}
+	}
+	return fields
+}
+
+func (m *Model) sectionInfo() []core.InfoRow {
+	section, ok := m.currentSection()
+	if !ok {
+		return nil
+	}
+	rows := make([]core.InfoRow, 0, len(m.info))
+	for _, row := range m.info {
+		if row.Section == section.ID {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func (m *Model) currentSection() (core.Section, bool) {
+	if m.section < 0 || m.section >= len(m.sections) {
+		return core.Section{}, false
+	}
+	return m.sections[m.section], true
+}
+
+func (m *Model) currentField() (core.Value, bool) {
+	fields := m.sectionFields()
+	if m.field < 0 || m.field >= len(fields) {
+		return core.Value{}, false
+	}
+	return fields[m.field], true
+}
+
+// sectionCount conta os ajustes de uma seção, para a lista da esquerda dizer
+// o que há dentro antes de o usuário entrar.
+func (m *Model) sectionCount(section core.Section) int {
+	count := 0
+	for _, value := range m.values {
+		if value.Section == section.ID {
+			count++
+		}
+	}
+	for _, row := range m.info {
+		if row.Section == section.ID {
+			count++
+		}
+	}
+	return count
+}

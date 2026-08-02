@@ -162,17 +162,41 @@ do dono no diretório de dados. `lealing -logout` esquece a credencial desta
 máquina; para encerrar o acesso de vez, revogue o aplicativo em
 `github.com/settings/applications`.
 
-**Para builds próprios:** o device flow exige um OAuth App registrado. Crie um
-em `github.com/settings/developers` com *Enable Device Flow* marcado e informe
-o client_id — que é público, não é segredo:
+**Para builds próprios:** o device flow usa o OAuth App do lealing, cujo
+client_id está no código — ele é público por definição, e o que não existe
+neste fluxo é segredo de cliente. Um fork registra o seu em
+`github.com/settings/developers`, com *Enable Device Flow* marcado, e informa
+por qualquer um dos três caminhos:
 
 ```sh
-export LEALING_GITHUB_CLIENT_ID=Iv1.xxxxxxxx   # desenvolvimento
+# na tela de configuração (c → Conta → Client ID), que grava em disco
+export LEALING_GITHUB_CLIENT_ID=Ov23li…          # ou por ambiente
+go build -ldflags "-X …/bootstrap.githubClientID=Ov23li…"   # ou no build
 ```
 
-Na release, o mesmo valor entra por `-ldflags` a partir da variável de
-repositório `LEALING_GITHUB_CLIENT_ID`. Sem ele, a tool aparece e explica que
-o build não tem app configurado, em vez de falhar no meio do login.
+A precedência é essa mesma: o que você gravou na tela vence o ambiente, que
+vence o valor do build.
+
+### Configuração
+
+`c` abre a configuração da engine, em seções:
+
+| Seção | O que tem |
+|---|---|
+| **Conta** | Client ID do OAuth App usado no login |
+| **Marketplace** | URL do índice oficial e se a home consulta as origens ao abrir |
+| **Aparência** | Nome usado na saudação da home |
+| **Ambiente** | Versão e os caminhos onde a engine guarda config, dados, cache e tools |
+
+`↑↓` percorre, `→` entra nos ajustes, `↵` edita (ou alterna um interruptor) e
+`r` volta ao padrão. Cada campo mostra de onde veio o valor em vigor —
+`padrão`, `variável de ambiente` ou `definido por você` —, porque quando algo
+não funciona a ação é diferente em cada caso.
+
+Só o que você mudou vai para `~/.config/lealing/settings.json`. Gravar a
+configuração inteira congelaria padrões que a engine deve poder melhorar numa
+atualização. Ajustes que exigem reabrir o lealing dizem isso na própria linha,
+em vez de parecerem sem efeito.
 
 ### Repositórios paralelos de tools
 
@@ -429,6 +453,7 @@ extraído da release oficial e use
 | `tab` | cicla entre painéis |
 | `↵` | abre a tool (ou a loja, com a vitrine focada) |
 | `m` | abre o marketplace de qualquer lugar |
+| `c` | abre a configuração da engine |
 | `f` | favorita / desfavorita |
 | `r` | recarrega |
 | `esc` | volta um nível |
@@ -478,6 +503,7 @@ internal/
     interactive/                portas e caso de uso de sessão externa
     toolinstall/ marketplace/   instalação, rollback e agregação de origens
     usersync/                   estado sincronizável, conflito e seções
+    settings/                   campos declarados, validação e precedência
     service/                    catálogo, launcher e requisitos
     sysinfo/ power/             núcleos das tools ainda builtin
   adapter/
@@ -491,6 +517,7 @@ internal/
       marketplacehttp/          índice remoto, checksum e extração segura
       marketplacefile/          índice e artefatos em disco (repo próprio)
       marketplacesources/       origens do usuário em JSON atômico
+      settingsstore/            ajustes alterados em JSON atômico
       githubauth/               OAuth Device Flow do GitHub
       githubstate/              repositório privado de preferências
       usersyncstore/            credencial no cofre e ajustes em JSON

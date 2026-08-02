@@ -332,7 +332,7 @@ func (m *Model) handleBrowseKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		m.loading = true
 		m.notify("recarregando catálogo…", toneInfo)
 		cmds := []tea.Cmd{m.loadCatalog()}
-		if m.marketplace != nil {
+		if m.marketplaceEnabled() {
 			m.marketplaceLoading = true
 			m.marketplaceErr = nil
 			cmds = append(cmds, m.loadMarketplace())
@@ -341,6 +341,9 @@ func (m *Model) handleBrowseKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 
 	case "m":
 		return m, m.openMarketplace()
+
+	case "c":
+		return m, m.openSettings()
 	}
 
 	return m, nil

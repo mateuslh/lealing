@@ -621,6 +621,7 @@ Regras para agentes:
 | Porta com suporte parcial | `core/power/fields.go` (`Feature`, `Merge`) |
 | Escolha do adapter por sistema | `internal/bootstrap/platform.go` |
 | Cofre de credenciais por plataforma | `internal/platform/secrets/` |
+| Ajuste novo na tela de configuração | `internal/core/settings/settings.go` (só declare o `Field`) |
 | Estado do usuário e conflito | `internal/core/usersync/` |
 | Validação catálogo ↔ tela ↔ runner | `internal/bootstrap/wiring.go` |
 | Matriz de suporte do acervo | `internal/bootstrap/matrix.go` · `lealing -platforms` |

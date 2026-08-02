@@ -38,7 +38,7 @@ func server(t *testing.T, device string, tokens []string, identity string) *http
 func client(t *testing.T, base string) *Client {
 	t.Helper()
 	return New(Config{
-		ClientID: "Iv1.teste", DeviceURL: base + "/device",
+		ClientID: func() string { return "Iv1.teste" }, DeviceURL: base + "/device",
 		TokenURL: base + "/token", IdentityURL: base + "/user",
 		MinInterval: time.Millisecond,
 	})
