@@ -86,7 +86,9 @@ guarda o caminho absoluto. Para desinstalar, `make uninstall`.
 
 ### Tools externas
 
-Abra **Marketplace de Tools** na própria home ou use a CLI. A listagem remota
+A vitrine do marketplace fica na própria home: chegue nela com as setas e
+tecle `↵`, ou use `m` de qualquer lugar. Ela não é uma tool do catálogo — é de
+onde as tools vêm, então não disputa espaço com o que instala. A listagem
 filtra protocolo, versão mínima da engine e plataforma antes de oferecer a
 instalação:
 
@@ -97,10 +99,19 @@ lealing -tool-update token-usage
 lealing -tools
 ```
 
-Ao abrir a Home, a vitrine consulta os metadados do índice em segundo plano;
-ela nunca bloqueia a interface. A tela completa e a CLI reutilizam a mesma
-porta. Busca local não inicia processos, e nenhum executável é iniciado durante
-a descoberta. O pacote
+Ao abrir a Home, a vitrine consulta as origens em segundo plano; ela nunca
+bloqueia a interface. O painel ordena por urgência — o que tem atualização
+vem antes da novidade, e o que já está em dia por último — e resume quantas
+origens responderam.
+
+Dentro da loja, `→` abre a **ficha** da tool em largura cheia: descrição
+longa, procedência, requisitos e a lista dos caminhos que ela vai poder ler e
+escrever, um por linha. `⇞ ⇟` rolam, `←` volta à lista e `↵` instala. Ver as
+permissões concretas antes de instalar é o ponto: contar "2 leituras" não
+deixa ninguém decidir nada.
+
+A tela completa e a CLI reutilizam a mesma porta. Busca local não inicia
+processos, e nenhum executável é iniciado durante a descoberta. O pacote
 é baixado para cache temporário com limite de tamanho, tem o SHA-256 conferido
 antes da extração, recusa caminhos externos e links e é revalidado contra o ID
 e a versão escolhidos antes da troca atômica.
@@ -113,6 +124,105 @@ Liste somente o que já está instalado:
 
 ```sh
 lealing -tools
+```
+
+### Conta e sincronização
+
+Suas preferências podem viver em um repositório privado da sua conta do
+GitHub, para que outra máquina chegue configurada:
+
+```sh
+lealing -login          # device flow: abre uma página e pede um código
+lealing -sync           # o que está aqui e o que está lá
+lealing -sync-push      # envia
+lealing -sync-pull      # baixa
+lealing -logout
+```
+
+Na TUI, a tool **Conta e Sincronização** faz o mesmo com `s` enviar, `b`
+baixar e `espaço` para ligar cada seção.
+
+Três seções, ligadas e desligadas separadamente: **favoritos e uso**,
+**origens do marketplace** e **tools instaladas** — desta última só a lista
+viaja, porque instalar código de terceiros continua sendo uma decisão sua,
+tool a tool, no marketplace.
+
+O que nunca sai da máquina: credenciais. As contas do Claude Code, os tokens
+do cofre e qualquer segredo ficam onde estão — repositório privado não é
+lugar de segredo.
+
+Enviar e baixar são explícitos, e divergência vira pergunta. Se o repositório
+mudou desde a última vez que esta máquina sincronizou, o lealing recusa a
+escrita e mostra quem enviou e quando; sobrescrever exige confirmar (ou
+`-force` na CLI). Fundir contadores de uso produziria números que nunca
+aconteceram, e escolher um lado em silêncio descartaria o trabalho do outro.
+
+O token fica no chaveiro do macOS e, nas outras plataformas, em um arquivo só
+do dono no diretório de dados. `lealing -logout` esquece a credencial desta
+máquina; para encerrar o acesso de vez, revogue o aplicativo em
+`github.com/settings/applications`.
+
+**Para builds próprios:** o device flow exige um OAuth App registrado. Crie um
+em `github.com/settings/developers` com *Enable Device Flow* marcado e informe
+o client_id — que é público, não é segredo:
+
+```sh
+export LEALING_GITHUB_CLIENT_ID=Iv1.xxxxxxxx   # desenvolvimento
+```
+
+Na release, o mesmo valor entra por `-ldflags` a partir da variável de
+repositório `LEALING_GITHUB_CLIENT_ID`. Sem ele, a tool aparece e explica que
+o build não tem app configurado, em vez de falhar no meio do login.
+
+### Repositórios paralelos de tools
+
+O marketplace não é um endereço: é a soma das origens que você habilitou.
+Além do índice oficial embutido, dá para registrar quantos repositórios
+quiser — um índice publicado por HTTPS ou um diretório no seu disco:
+
+```sh
+lealing -source-add https://exemplo.dev/tools/index.json
+lealing -source-add /Users/voce/dev/minhas-tools   # repositório em disco
+lealing -sources
+lealing -source-disable exemplo-dev
+lealing -source-remove exemplo-dev
+```
+
+O nome é derivado do endereço quando você não passa `-source-name`. Na TUI,
+`⇄` abre a aba de origens: `a` cadastra, `espaço` liga e desliga, `d` remove.
+As origens ficam em `~/.config/lealing/marketplace-sources.json`
+(`%APPDATA%\lealing\` no Windows).
+
+Três regras mantêm a descentralização segura:
+
+- **O canal é da engine, não do índice.** Só a origem embutida publica nos
+  canais `official` e `verified`; qualquer outra tem suas entradas rebaixadas
+  para `community`, mesmo que o JSON diga o contrário.
+- **Conflito de ID é vencido por prioridade, não por versão.** Se um índice
+  paralelo publicar `token-usage` na versão 9.9.9, a entrada oficial continua
+  sendo a instalada por padrão. Para escolher a outra de propósito, use a
+  referência qualificada: `lealing -tool-install origem/token-usage`.
+- **Uma origem fora do ar não derruba as demais.** Cada índice é buscado e
+  validado isoladamente; a falha aparece marcada na aba de origens e o resto
+  do catálogo continua utilizável.
+
+Um repositório local é o caminho de quem está desenvolvendo uma tool: o
+`index.json` fica no diretório do projeto e cada artefato aponta para a pasta
+de build, relativa ao índice. Como o diretório muda a cada `go build`, uma
+origem local não declara `sha256` — em troca, ela nunca sai da sua máquina:
+
+```json
+{
+  "apiVersion": "lealing.dev/marketplace/v1",
+  "tools": [{
+    "id": "minha-tool", "version": "0.1.0", "name": "Minha Tool",
+    "summary": "Tool em desenvolvimento.", "category": "utilities",
+    "risk": "safe", "publisher": "voce", "channel": "community",
+    "protocol": {"min": 1, "max": 1},
+    "permissions": {"filesystem": {"read": [], "write": []}, "network": false, "subprocess": false},
+    "artifacts": [{"platform": "darwin-arm64", "url": "dist/darwin-arm64"}]
+  }]
+}
 ```
 
 Um pacote local é um diretório com `manifest.yaml` e o executável da
@@ -196,6 +306,7 @@ pendente, teste quebrado ou falha de compilação interrompem a publicação.
 | **Uso de Tokens** | Tool externa `screen-v1`: cotas das CLIs de IA, consumo e custo por janela, modelo, projeto e dia. |
 | **Contas do Claude Code** | Guarda as sessões de várias contas e alterna entre elas sem refazer login. |
 | **Atualizar o lealing** | Compara a versão instalada com o último release e atualiza pelo caminho por onde o lealing foi instalado. |
+| **Conta e Sincronização** | Entra na conta do GitHub pelo device flow e leva favoritos, uso e origens para um repositório privado seu. |
 | **Clone Repo Bradesco** | Descobre a família de um projeto no GitHub, clona os repositórios escolhidos e os registra no IntelliJ. |
 | **Radar Git do dev** | Varre os clones em `~/dev`, mostra branches e alterações pendentes e oferece ações Git explícitas. |
 | **Bancada de engenharia** | Sonda HTTP, DNS/TLS, JSON, JWT, CIDR, codecs, checksums e UUIDs em telas nativas. |
@@ -286,7 +397,9 @@ lealing                                          # abre a TUI
 lealing -render 150x42                           # imprime um frame estático
 lealing -render 120x34 -keys '/token[enter]'     # já dentro de uma tool
 lealing -update                                  # atualiza e sai
-lealing -marketplace                             # tools públicas compatíveis
+lealing -marketplace                             # tools compatíveis em todas as origens
+lealing -sources                                 # repositórios de tools cadastrados
+lealing -source-add /Users/voce/dev/tools        # registra um repo próprio
 lealing -tools                                   # tools externas instaladas
 lealing -tool-install token-usage                # instala pelo marketplace
 lealing -tool-install ./pacote                   # instala/atualiza localmente
@@ -296,8 +409,11 @@ lealing -tool-rollback token-usage               # recupera versão anterior
 Flags: `-debug` (log em arquivo + validação estrita do catálogo),
 `-ephemeral` (não persiste favoritos), `-platforms` (matriz de suporte),
 `-update` (atualiza a engine sem abrir a TUI), `-marketplace`,
-`-marketplace-url`, `-tools`, `-tool-install`, `-tool-update`, `-tool-remove`,
-`-tool-rollback`, `-tool-validate` e `-version`.
+`-marketplace-url`, `-sources`, `-source-add`, `-source-name`,
+`-source-remove`, `-source-enable`, `-source-disable`, `-tools`,
+`-tool-install`, `-tool-update`, `-tool-remove`, `-tool-rollback`,
+`-tool-validate`, `-login`, `-logout`, `-sync`, `-sync-push`, `-sync-pull`,
+`-force` e `-version`.
 
 Sem instalar tools: `make run`. Para renderizar `token-usage`, instale o pacote
 extraído da release oficial e use
@@ -311,7 +427,8 @@ extraído da release oficial e use
 | `↑ ↓` / `j k` | move a seleção |
 | `← →` / `h l` | troca de painel |
 | `tab` | cicla entre painéis |
-| `↵` | abre a tool |
+| `↵` | abre a tool (ou a loja, com a vitrine focada) |
+| `m` | abre o marketplace de qualquer lugar |
 | `f` | favorita / desfavorita |
 | `r` | recarrega |
 | `esc` | volta um nível |
@@ -359,7 +476,8 @@ internal/
   core/
     domain/                     catálogo, runtime declarativo e uso
     interactive/                portas e caso de uso de sessão externa
-    toolinstall/ marketplace/   instalação, rollback e índice neutro
+    toolinstall/ marketplace/   instalação, rollback e agregação de origens
+    usersync/                   estado sincronizável, conflito e seções
     service/                    catálogo, launcher e requisitos
     sysinfo/ power/             núcleos das tools ainda builtin
   adapter/
@@ -370,7 +488,12 @@ internal/
     outbound/
       externalcatalog/          descoberta lazy, somente por manifest
       pluginprocess/            spawn, handshake, framing e shutdown
-      marketplacehttp/         índice, download, checksum e extração segura
+      marketplacehttp/          índice remoto, checksum e extração segura
+      marketplacefile/          índice e artefatos em disco (repo próprio)
+      marketplacesources/       origens do usuário em JSON atômico
+      githubauth/               OAuth Device Flow do GitHub
+      githubstate/              repositório privado de preferências
+      usersyncstore/            credencial no cofre e ajustes em JSON
       toolstore/                instalação local atômica e rollback
       registry/ search/         consolidação e relevância
       persistence/              favoritos e estatísticas em JSON atômico
@@ -428,3 +551,9 @@ Esse teste de geometria pegou seis bugs reais durante a construção, entre eles
 uma fila de cartões transbordando a largura (o `lipgloss.Width` dimensiona o
 conteúdo, não o bloco com borda) e painéis saindo pela base em janelas baixas.
 Toda tela nova deve entrar nele — veja a seção 6 do **[AGENTS.md](AGENTS.md)**.
+
+Em janela pequena a home descarta painéis que não cabem. O que é desenhado é
+também o que o teclado alcança: o foco nunca fica num painel invisível, e a
+moldura do último painel anuncia quantos ficaram de fora. Layout e navegação
+lendo listas diferentes é como uma TUI passa a responder a setas que o usuário
+não vê.

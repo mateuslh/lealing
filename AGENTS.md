@@ -620,6 +620,8 @@ Regras para agentes:
 | Adapter de uma segunda plataforma | `windows/power.go` + `windows/power_test.go` |
 | Porta com suporte parcial | `core/power/fields.go` (`Feature`, `Merge`) |
 | Escolha do adapter por sistema | `internal/bootstrap/platform.go` |
+| Cofre de credenciais por plataforma | `internal/platform/secrets/` |
+| Estado do usuário e conflito | `internal/core/usersync/` |
 | Validação catálogo ↔ tela ↔ runner | `internal/bootstrap/wiring.go` |
 | Matriz de suporte do acervo | `internal/bootstrap/matrix.go` · `lealing -platforms` |
 | Agregação e erro parcial externa | `lealing-tools/internal/tokenusage/tokens/` |
@@ -815,8 +817,35 @@ intervalo do protocolo, versão mínima da engine e canal `official`, `verified`
 ou `community`. O seletor pega a versão mais nova compatível; nunca fixe a
 engine a uma versão numérica da tool.
 
+**Publicar não exige passar pelo registry oficial.** O marketplace é a soma
+das origens habilitadas (`internal/core/marketplace/source.go`): além do índice
+embutido, o usuário cadastra quantos repositórios quiser, remotos por HTTPS ou
+locais em disco, com `lealing -source-add` ou pela aba de origens da tela.
+Publicar de forma independente é hospedar um `index.json` que obedeça ao mesmo
+contrato e divulgar o endereço.
+
+Três invariantes sustentam isso e não podem ser afrouxadas ao mexer no core:
+
+- **O canal pertence à engine.** `Origin.Trusted` só é marcado no composition
+  root; entradas de qualquer outra origem são rebaixadas para `community` em
+  `fetchOrigin`, mesmo que o JSON declare `official`.
+- **Prioridade vence versão.** Em conflito de ID, `SelectLatest` ordena por
+  `Origin.Priority` antes da versão, para que um índice paralelo não sequestre
+  o nome de uma tool oficial publicando um número maior. A referência
+  qualificada `origem/id` continua permitindo a escolha explícita.
+- **Origem é unidade de falha.** Cada índice é buscado e validado isolado; um
+  repositório fora do ar vira `SourceStatus.Err` e não impede os demais de
+  aparecer.
+
+Uma origem local (`OriginLocal`) aponta para um diretório com `index.json` e
+artefatos relativos a ele. Ela não declara `sha256` — o artefato é o diretório
+de build do próprio usuário —, e `marketplacefile` recusa travessia, symlink
+para fora do repositório e artefato que não seja diretório. É o caminho de
+desenvolvimento: instalar o build local pelo mesmo fluxo do índice público,
+sem publicar release.
+
 O registry público vive em `github.com/mateuslh/lealing-tools/marketplace`.
-Para publicar, crie uma entrada imutável por versão em `marketplace/tools/`,
+Para publicar nele, crie uma entrada imutável por versão em `marketplace/tools/`,
 comece no canal `community`, rode `go run ./cmd/marketplace-index` e envie a
 entrada mais o `index.json` gerado por pull request. `publishers.json` reserva
 `official` e `verified`; CODEOWNERS exige revisão da política. A CI valida
@@ -830,9 +859,12 @@ versão do protocolo e preserva negociação com versões antigas quando possív
 O cliente da engine não depende de GitHub: recebe uma URL HTTPS de índice,
 baixa em streaming com limites, verifica o checksum do pacote, recusa
 traversal e links na extração e só então entrega o diretório temporário ao
-instalador local. O índice padrão usa o arquivo consolidado do repositório das
-tools; `-marketplace-url` permite testar outro registry que obedeça ao mesmo
-contrato.
+instalador local. A origem embutida usa o arquivo consolidado do repositório
+das tools; `-marketplace-url` troca esse endereço, e `-source-add` acrescenta
+outros repositórios sem substituir nenhum. As origens do usuário ficam em
+`~/.config/lealing/marketplace-sources.json`, escritas atomicamente; confiança
+e caráter embutido nunca são serializados, para que editar o arquivo à mão não
+promova um índice de terceiro.
 
 `token-usage` já foi extraída para `github.com/mateuslh/lealing-tools`. Migre as
 outras verticais em mudanças independentes, conserve os IDs e importe apenas o
