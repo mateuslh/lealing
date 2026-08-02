@@ -63,6 +63,8 @@ func ParseKeys(s string) ([]tea.KeyMsg, error) {
 		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "tab": tea.KeyTab,
 		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
 		"space": tea.KeySpace, "backspace": tea.KeyBackspace,
+		"pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown,
+		"home": tea.KeyHome, "end": tea.KeyEnd,
 	}
 
 	var out []tea.KeyMsg
