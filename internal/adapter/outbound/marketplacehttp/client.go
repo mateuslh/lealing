@@ -37,8 +37,9 @@ type HTTPClient interface {
 }
 
 type Config struct {
-	Client        HTTPClient
-	IndexURL      string
+	Client HTTPClient
+	// TemporaryRoot hospeda os downloads em andamento; a URL de cada índice
+	// chega em Fetch, porque a engine consulta várias origens.
 	TemporaryRoot string
 	// AllowHTTP existe para testes herméticos e índices locais de
 	// desenvolvimento. O bootstrap público nunca o habilita.
@@ -75,10 +76,10 @@ func New(config Config) *Source {
 	return &Source{config: config}
 }
 
-func (s *Source) Fetch(ctx context.Context) (marketplace.Index, error) {
-	response, err := s.get(ctx, s.config.IndexURL)
+func (s *Source) Fetch(ctx context.Context, origin marketplace.Origin) (marketplace.Index, error) {
+	response, err := s.get(ctx, origin.Ref)
 	if err != nil {
-		return marketplace.Index{}, fmt.Errorf("baixar índice do marketplace: %w", err)
+		return marketplace.Index{}, fmt.Errorf("baixar índice de %s: %w", origin.Name, err)
 	}
 	defer response.Body.Close()
 	if response.ContentLength > s.config.IndexLimit {
@@ -102,7 +103,7 @@ func (s *Source) Fetch(ctx context.Context) (marketplace.Index, error) {
 	return index, nil
 }
 
-func (s *Source) Prepare(ctx context.Context, artifact marketplace.Artifact) (_ marketplace.PreparedPackage, resultErr error) {
+func (s *Source) Prepare(ctx context.Context, _ marketplace.Origin, artifact marketplace.Artifact) (_ marketplace.PreparedPackage, resultErr error) {
 	if s.config.TemporaryRoot == "" {
 		return marketplace.PreparedPackage{}, errors.New("diretório temporário do marketplace não configurado")
 	}

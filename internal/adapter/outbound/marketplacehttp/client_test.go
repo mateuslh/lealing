@@ -19,6 +19,13 @@ import (
 	"github.com/mateuslh/lealing/internal/core/marketplace"
 )
 
+// remoteOrigin monta a origem HTTPS que o adapter recebe em cada chamada.
+func remoteOrigin(reference string) marketplace.Origin {
+	return marketplace.Origin{
+		Name: "teste", Kind: marketplace.OriginRemote, Ref: reference, Enabled: true,
+	}
+}
+
 func TestFetchAceitaJSONEntregueEmPartes(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		flusher := writer.(http.Flusher)
@@ -29,8 +36,8 @@ func TestFetchAceitaJSONEntregueEmPartes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	source := New(Config{Client: server.Client(), IndexURL: server.URL, AllowHTTP: true, TemporaryRoot: t.TempDir()})
-	index, err := source.Fetch(context.Background())
+	source := New(Config{Client: server.Client(), AllowHTTP: true, TemporaryRoot: t.TempDir()})
+	index, err := source.Fetch(context.Background(), remoteOrigin(server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +56,8 @@ func TestFetchRejeitaPayloadGrandeEJSONInvalido(t *testing.T) {
 				_, _ = writer.Write([]byte(body))
 			}))
 			defer server.Close()
-			source := New(Config{Client: server.Client(), IndexURL: server.URL, AllowHTTP: true, IndexLimit: 64, TemporaryRoot: t.TempDir()})
-			if _, err := source.Fetch(context.Background()); err == nil {
+			source := New(Config{Client: server.Client(), AllowHTTP: true, IndexLimit: 64, TemporaryRoot: t.TempDir()})
+			if _, err := source.Fetch(context.Background(), remoteOrigin(server.URL)); err == nil {
 				t.Fatal("Fetch aceitou resposta inválida")
 			}
 		})
@@ -60,7 +67,7 @@ func TestFetchRejeitaPayloadGrandeEJSONInvalido(t *testing.T) {
 func TestPrepareExtraiZIPDepoisDeValidarChecksum(t *testing.T) {
 	archive := zipArchive(t, map[string]string{"manifest.yaml": "manifest", "demo.exe": "binário"})
 	source, artifact := packageServer(t, "/demo.zip", archive)
-	prepared, err := source.Prepare(context.Background(), artifact)
+	prepared, err := source.Prepare(context.Background(), remoteOrigin(""), artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +81,7 @@ func TestPrepareExtraiZIPDepoisDeValidarChecksum(t *testing.T) {
 func TestPrepareExtraiTarGZ(t *testing.T) {
 	archive := tarArchive(t, map[string]string{"./manifest.yaml": "manifest", "./demo": "binário"})
 	source, artifact := packageServer(t, "/demo.tar.gz", archive)
-	prepared, err := source.Prepare(context.Background(), artifact)
+	prepared, err := source.Prepare(context.Background(), remoteOrigin(""), artifact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +95,7 @@ func TestPrepareRecusaChecksumDiferenteESemDeixarTemporario(t *testing.T) {
 	archive := zipArchive(t, map[string]string{"manifest.yaml": "manifest"})
 	source, artifact := packageServer(t, "/demo.zip", archive)
 	artifact.SHA256 = strings.Repeat("0", 64)
-	if _, err := source.Prepare(context.Background(), artifact); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, err := source.Prepare(context.Background(), remoteOrigin(""), artifact); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("Prepare = %v", err)
 	}
 	entries, err := os.ReadDir(source.config.TemporaryRoot)
@@ -104,7 +111,7 @@ func TestPrepareRecusaTraversalEEntradaSimbolica(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			source, artifact := packageServer(t, "/demo.zip", archive)
-			if _, err := source.Prepare(context.Background(), artifact); err == nil {
+			if _, err := source.Prepare(context.Background(), remoteOrigin(""), artifact); err == nil {
 				t.Fatal("Prepare aceitou entrada insegura")
 			}
 		})

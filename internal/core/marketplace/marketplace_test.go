@@ -102,18 +102,38 @@ func TestPreReleaseNaoAtendeMinimumEngineEstavel(t *testing.T) {
 	}
 }
 
-type fakeIndex struct{ index marketplace.Index }
+// fakeIndex devolve um índice por origem, para exercitar a agregação sem
+// nenhuma rede.
+type fakeIndex struct {
+	byOrigin map[string]marketplace.Index
+	failures map[string]error
+}
 
-func (f fakeIndex) Fetch(context.Context) (marketplace.Index, error) { return f.index, nil }
+func (f fakeIndex) Fetch(_ context.Context, origin marketplace.Origin) (marketplace.Index, error) {
+	if err, failed := f.failures[origin.Name]; failed {
+		return marketplace.Index{}, err
+	}
+	return f.byOrigin[origin.Name], nil
+}
 
 type fakePackages struct {
 	prepared marketplace.PreparedPackage
 	artifact marketplace.Artifact
+	origin   marketplace.Origin
 }
 
-func (f *fakePackages) Prepare(_ context.Context, artifact marketplace.Artifact) (marketplace.PreparedPackage, error) {
-	f.artifact = artifact
+func (f *fakePackages) Prepare(_ context.Context, origin marketplace.Origin, artifact marketplace.Artifact) (marketplace.PreparedPackage, error) {
+	f.origin, f.artifact = origin, artifact
 	return f.prepared, nil
+}
+
+// memorySources é o SourceStore em memória usado pelos testes de origem.
+type memorySources struct{ state marketplace.SourceState }
+
+func (m *memorySources) Load(context.Context) (marketplace.SourceState, error) { return m.state, nil }
+func (m *memorySources) Save(_ context.Context, state marketplace.SourceState) error {
+	m.state = state
+	return nil
 }
 
 type fakeInstaller struct {
@@ -139,14 +159,44 @@ type fakeReloader struct{ calls int }
 
 func (f *fakeReloader) Reload(context.Context) error { f.calls++; return nil }
 
+func officialOrigin() marketplace.Origin {
+	return marketplace.Origin{
+		Name: "lealing", Label: "índice oficial", Kind: marketplace.OriginRemote,
+		Ref: "https://example.test/index.json", Trusted: true, Builtin: true, Enabled: true,
+	}
+}
+
+func indexWith(entries ...marketplace.Entry) marketplace.Index {
+	return marketplace.Index{APIVersion: marketplace.APIVersion, Tools: entries}
+}
+
 func testService(installer *fakeInstaller, packages *fakePackages, reloader *fakeReloader) *marketplace.Service {
-	return marketplace.NewService(marketplace.Config{
-		Platform: "darwin-arm64", EngineVersion: "1.5.0", Protocol: marketplace.VersionRange{Min: 1, Max: 1},
-		Validation: validationOptions(), Index: fakeIndex{index: marketplace.Index{
-			APIVersion: marketplace.APIVersion, Tools: []marketplace.Entry{validEntry()},
-		}},
+	return newService(marketplace.Config{
+		Index:    fakeIndex{byOrigin: map[string]marketplace.Index{"lealing": indexWith(validEntry())}},
 		Packages: packages, Installer: installer, CatalogReloader: reloader,
 	})
+}
+
+// newService preenche o que todo teste repetiria e deixa o caso destacar
+// apenas o que ele está exercitando.
+func newService(config marketplace.Config) *marketplace.Service {
+	config.Platform = "darwin-arm64"
+	config.EngineVersion = "1.5.0"
+	config.Protocol = marketplace.VersionRange{Min: 1, Max: 1}
+	config.Validation = validationOptions()
+	if config.BuiltinSources == nil {
+		config.BuiltinSources = []marketplace.Origin{officialOrigin()}
+	}
+	if config.Sources == nil {
+		config.Sources = &memorySources{}
+	}
+	if config.Installer == nil {
+		config.Installer = &fakeInstaller{}
+	}
+	if config.Packages == nil {
+		config.Packages = &fakePackages{}
+	}
+	return marketplace.NewService(config)
 }
 
 func TestServiceListaEstadoInstaladoEAtualizacao(t *testing.T) {
@@ -192,5 +242,232 @@ func TestServiceNaoBaixaVersaoJaAtiva(t *testing.T) {
 	}
 	if packages.artifact.URL != "" {
 		t.Fatal("pacote foi preparado para uma versão já ativa")
+	}
+}
+
+func communityOrigin(name string) marketplace.Origin {
+	return marketplace.Origin{
+		Name: name, Kind: marketplace.OriginRemote,
+		Ref: "https://" + name + ".test/index.json", Enabled: true,
+	}
+}
+
+func entryFrom(id, version, channel string) marketplace.Entry {
+	entry := validEntry()
+	entry.ID, entry.Version, entry.Name = id, version, id
+	entry.DistributionTier = marketplace.Channel(channel)
+	return entry
+}
+
+func TestCatalogAgregaOrigensEDegradaPorOrigem(t *testing.T) {
+	service := newService(marketplace.Config{
+		BuiltinSources: []marketplace.Origin{officialOrigin()},
+		Sources: &memorySources{state: marketplace.SourceState{
+			Custom: []marketplace.Origin{communityOrigin("parceiro"), communityOrigin("offline")},
+		}},
+		Index: fakeIndex{
+			byOrigin: map[string]marketplace.Index{
+				"lealing":  indexWith(entryFrom("demo", "1.2.0", "official")),
+				"parceiro": indexWith(entryFrom("extra", "0.1.0", "community")),
+			},
+			failures: map[string]error{"offline": errors.New("sem rede")},
+		},
+	})
+
+	catalog, err := service.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Tools) != 2 {
+		t.Fatalf("tools = %d, quero as duas origens que responderam", len(catalog.Tools))
+	}
+	if !catalog.Degraded() {
+		t.Fatal("a origem fora do ar não foi sinalizada")
+	}
+	var failed int
+	for _, status := range catalog.Sources {
+		if status.Err != nil {
+			failed++
+			if status.Name != "offline" {
+				t.Fatalf("origem com erro = %s", status.Name)
+			}
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("origens com erro = %d", failed)
+	}
+}
+
+func TestOrigemNaoConfiavelPerdeOSeloDeCanal(t *testing.T) {
+	service := newService(marketplace.Config{
+		// Sem origem embutida: a única consultada é a do usuário.
+		BuiltinSources: []marketplace.Origin{},
+		Sources: &memorySources{state: marketplace.SourceState{
+			Custom: []marketplace.Origin{communityOrigin("terceiro")},
+		}},
+		Index: fakeIndex{byOrigin: map[string]marketplace.Index{
+			"terceiro": indexWith(entryFrom("demo", "1.2.0", "official")),
+		}},
+	})
+
+	listings, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listings) != 1 || listings[0].DistributionTier != marketplace.ChannelCommunity {
+		t.Fatalf("canal = %+v; um índice de terceiro não pode se declarar oficial", listings)
+	}
+}
+
+func TestOrigemDeMaiorPrioridadeVenceConflitoDeID(t *testing.T) {
+	packages := &fakePackages{prepared: marketplace.PreparedPackage{Directory: "/tmp/demo"}}
+	service := newService(marketplace.Config{
+		Sources: &memorySources{state: marketplace.SourceState{
+			Custom: []marketplace.Origin{communityOrigin("impostor")},
+		}},
+		Index: fakeIndex{byOrigin: map[string]marketplace.Index{
+			"lealing":  indexWith(entryFrom("demo", "1.2.0", "official")),
+			"impostor": indexWith(entryFrom("demo", "9.9.9", "community")),
+		}},
+		Packages: packages,
+	})
+
+	listings, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listings) != 1 {
+		t.Fatalf("listings = %d", len(listings))
+	}
+	if listings[0].Version != "1.2.0" || listings[0].Origin.Name != "lealing" {
+		t.Fatalf("vencedor = %s@%s", listings[0].Origin.Name, listings[0].Version)
+	}
+	if len(listings[0].Shadowed) != 1 || listings[0].Shadowed[0] != "impostor" {
+		t.Fatalf("shadowed = %v", listings[0].Shadowed)
+	}
+
+	// A referência qualificada continua permitindo instalar a outra de
+	// propósito: a prioridade protege o padrão, não proíbe a escolha.
+	if _, err := service.Install(context.Background(), "impostor/demo"); err != nil {
+		t.Fatal(err)
+	}
+	if packages.origin.Name != "impostor" {
+		t.Fatalf("origem preparada = %s", packages.origin.Name)
+	}
+}
+
+func TestSourcesAdicionaRemoveEDesliga(t *testing.T) {
+	store := &memorySources{}
+	service := newService(marketplace.Config{Sources: store})
+	ctx := context.Background()
+
+	origin, err := marketplace.NewOrigin("", "", "https://github.com/alguem/tools/raw/main/index.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if origin.Name != "alguem-tools" {
+		t.Fatalf("nome derivado = %q", origin.Name)
+	}
+	if err := service.AddSource(ctx, origin); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AddSource(ctx, origin); !errors.Is(err, marketplace.ErrSourceExists) {
+		t.Fatalf("origem duplicada = %v", err)
+	}
+
+	origins, err := service.Sources(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(origins) != 2 || origins[0].Name != "lealing" || origins[1].Priority != 1 {
+		t.Fatalf("origens = %+v", origins)
+	}
+
+	if err := service.SetSourceEnabled(ctx, "lealing", false); err != nil {
+		t.Fatal(err)
+	}
+	origins, _ = service.Sources(ctx)
+	if origins[0].Enabled {
+		t.Fatal("a origem embutida continuou habilitada")
+	}
+	if err := service.RemoveSource(ctx, "lealing"); !errors.Is(err, marketplace.ErrSourceBuiltin) {
+		t.Fatalf("remoção da embutida = %v", err)
+	}
+	if err := service.RemoveSource(ctx, "alguem-tools"); err != nil {
+		t.Fatal(err)
+	}
+	if origins, _ = service.Sources(ctx); len(origins) != 1 {
+		t.Fatalf("origens após remoção = %+v", origins)
+	}
+}
+
+func TestOrigemAdicionadaNuncaNasceConfiavel(t *testing.T) {
+	store := &memorySources{}
+	service := newService(marketplace.Config{Sources: store})
+	forged := marketplace.Origin{
+		Name: "forjada", Kind: marketplace.OriginRemote,
+		Ref: "https://forjada.test/index.json", Trusted: true, Builtin: true,
+	}
+	if err := service.AddSource(context.Background(), forged); err != nil {
+		t.Fatal(err)
+	}
+	origins, err := service.Sources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, origin := range origins {
+		if origin.Name == "forjada" && (origin.Trusted || origin.Builtin) {
+			t.Fatalf("origem do usuário entrou confiável: %+v", origin)
+		}
+	}
+}
+
+func TestNewOriginRecusaEnderecoInseguroEAceitaCaminhoLocal(t *testing.T) {
+	if _, err := marketplace.NewOrigin("", "", "http://exemplo.test/index.json"); err == nil {
+		t.Fatal("HTTP simples foi aceito")
+	}
+	if _, err := marketplace.NewOrigin("", "", "exemplo.test/index.json"); err == nil {
+		t.Fatal("endereço sem esquema foi aceito")
+	}
+	local, err := marketplace.NewOrigin("", "", "/Users/alguem/dev/minhas-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.Kind != marketplace.OriginLocal || local.Name != "minhas-tools" {
+		t.Fatalf("origem local = %+v", local)
+	}
+}
+
+func TestIndiceLocalDispensaChecksumEURLRemota(t *testing.T) {
+	entry := validEntry()
+	entry.ManifestURL = ""
+	entry.Artifacts = []marketplace.Artifact{{Platform: "darwin-arm64", URL: "dist/darwin-arm64"}}
+
+	local := marketplace.ValidationOptions{
+		Categories: map[string]bool{"utilities": true},
+		Platforms:  map[string]bool{"darwin-arm64": true},
+		Local:      true,
+	}
+	if err := entry.Validate(local); err != nil {
+		t.Fatalf("índice local recusado: %v", err)
+	}
+	if err := entry.Validate(validationOptions()); err == nil {
+		t.Fatal("índice remoto aceitou artefato sem HTTPS")
+	}
+
+	entry.Artifacts[0].URL = "../fora"
+	if err := entry.Validate(local); err == nil {
+		t.Fatal("travessia de diretório foi aceita")
+	}
+}
+
+func TestSemOrigemHabilitadaOMarketplaceExplicaOMotivo(t *testing.T) {
+	service := newService(marketplace.Config{
+		Sources: &memorySources{state: marketplace.SourceState{DisabledBuiltins: []string{"lealing"}}},
+		Index:   fakeIndex{},
+	})
+	_, err := service.List(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "nenhuma origem") {
+		t.Fatalf("List = %v", err)
 	}
 }

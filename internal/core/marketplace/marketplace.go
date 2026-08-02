@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
@@ -82,6 +83,19 @@ type Entry struct {
 	Protocol         VersionRange `json:"protocol" yaml:"protocol"`
 	MinimumEngine    string       `json:"minimumEngine" yaml:"minimumEngine"`
 	DistributionTier Channel      `json:"channel" yaml:"channel"`
+	// Origin é preenchida pela engine ao ler o índice, nunca pelo publicador:
+	// um índice que pudesse declarar sua própria procedência escolheria seu
+	// selo de confiança.
+	Origin Origin `json:"-" yaml:"-"`
+}
+
+// Ref é a referência qualificada "origem/id", que desempata duas origens que
+// publicam o mesmo ID.
+func (e Entry) Ref() string {
+	if e.Origin.Name == "" {
+		return e.ID
+	}
+	return e.Origin.Name + "/" + e.ID
 }
 
 type Index struct {
@@ -95,6 +109,10 @@ type Index struct {
 type ValidationOptions struct {
 	Categories map[string]bool
 	Platforms  map[string]bool
+	// Local relaxa as exigências que só fazem sentido para um índice
+	// publicado: um repositório em disco aponta para diretórios de build que
+	// mudam a cada compilação e não tem URL de manifest para exibir.
+	Local bool
 }
 
 func (i Index) Validate(opts ValidationOptions) error {
@@ -137,7 +155,7 @@ func (e Entry) Validate(opts ValidationOptions) error {
 		return fmt.Errorf("protocolo inválido em %s", e.ID)
 	case e.MinimumEngine != "" && !validSemver(e.MinimumEngine):
 		return fmt.Errorf("minimumEngine inválida em %s: %q", e.ID, e.MinimumEngine)
-	case !safeHTTPS(e.ManifestURL):
+	case !opts.Local && !safeHTTPS(e.ManifestURL):
 		return fmt.Errorf("manifestUrl de %s precisa usar HTTPS", e.ID)
 	case len(e.Artifacts) == 0:
 		return fmt.Errorf("nenhum artefato em %s", e.ID)
@@ -150,9 +168,16 @@ func (e Entry) Validate(opts ValidationOptions) error {
 			return fmt.Errorf("plataforma desconhecida em %s: %q", e.ID, artifact.Platform)
 		case seenPlatforms[artifact.Platform]:
 			return fmt.Errorf("plataforma duplicada em %s: %s", e.ID, artifact.Platform)
-		case !safeHTTPS(artifact.URL):
+		case opts.Local && !validLocalPath(artifact.URL):
+			return fmt.Errorf("caminho do artefato %s/%s precisa ser relativo ao índice e não pode subir de diretório", e.ID, artifact.Platform)
+		case !opts.Local && !safeHTTPS(artifact.URL):
 			return fmt.Errorf("URL do artefato %s/%s precisa usar HTTPS", e.ID, artifact.Platform)
-		case !validSHA256(artifact.SHA256):
+		// Numa origem local o artefato é o diretório de build do próprio
+		// usuário, que muda a cada compilação. Aceitar um checksum ali seria
+		// exibir uma garantia que ninguém confere.
+		case opts.Local && artifact.SHA256 != "":
+			return fmt.Errorf("origem local não verifica checksum; remova sha256 de %s/%s", e.ID, artifact.Platform)
+		case !opts.Local && !validSHA256(artifact.SHA256):
 			return fmt.Errorf("SHA-256 inválido em %s/%s", e.ID, artifact.Platform)
 		}
 		seenPlatforms[artifact.Platform] = true
@@ -185,7 +210,8 @@ func (i Index) SelectLatest(id, platform, engineVersion string, protocol Version
 			continue
 		}
 		for _, artifact := range entry.Artifacts {
-			if artifact.Platform == platform && artifact.URL != "" && validSHA256(artifact.SHA256) {
+			usable := validSHA256(artifact.SHA256) || (entry.Origin.Kind == OriginLocal && artifact.SHA256 == "")
+			if artifact.Platform == platform && artifact.URL != "" && usable {
 				candidates = append(candidates, candidate{entry: entry, artifact: artifact, version: version})
 			}
 		}
@@ -193,14 +219,22 @@ func (i Index) SelectLatest(id, platform, engineVersion string, protocol Version
 	if len(candidates) == 0 {
 		return Entry{}, Artifact{}, ErrNotAvailable
 	}
-	sort.Slice(candidates, func(a, b int) bool { return less(candidates[b].version, candidates[a].version) })
+	// A prioridade da origem vem antes da versão de propósito. Se um índice
+	// paralelo publicasse 9.9.9 com o ID de uma tool oficial, ordenar só por
+	// versão faria a engine instalar o impostor.
+	sort.SliceStable(candidates, func(a, b int) bool {
+		if candidates[a].entry.Origin.Priority != candidates[b].entry.Origin.Priority {
+			return candidates[a].entry.Origin.Priority < candidates[b].entry.Origin.Priority
+		}
+		return less(candidates[b].version, candidates[a].version)
+	})
 	return candidates[0].entry, candidates[0].artifact, nil
 }
 
-// IndexSource lê o índice. Implementações podem usar HTTP, arquivo local ou
-// um cache assinado sem alterar o caso de uso.
+// IndexSource lê o índice de uma origem. Implementações podem usar HTTP,
+// arquivo local ou um cache assinado sem alterar o caso de uso.
 type IndexSource interface {
-	Fetch(ctx context.Context) (Index, error)
+	Fetch(ctx context.Context, origin Origin) (Index, error)
 }
 
 // PreparedPackage é um diretório temporário pronto para o instalador local.
@@ -213,7 +247,7 @@ type PreparedPackage struct {
 // PackageSource baixa, verifica o checksum do arquivo e extrai seu conteúdo
 // de forma confinada. Ele não instala nem executa a tool.
 type PackageSource interface {
-	Prepare(ctx context.Context, artifact Artifact) (PreparedPackage, error)
+	Prepare(ctx context.Context, origin Origin, artifact Artifact) (PreparedPackage, error)
 }
 
 // CatalogReloader torna uma instalação visível na mesma execução da engine.
@@ -225,19 +259,37 @@ type Listing struct {
 	Entry
 	InstalledVersion string
 	UpdateAvailable  bool
+	// Shadowed lista as outras origens que publicam este mesmo ID e perderam
+	// a disputa de prioridade. A tela mostra isso porque um ID repetido é
+	// tanto um acidente comum quanto a assinatura de uma tentativa de
+	// sequestro de nome.
+	Shadowed []string
 }
 
 // Manager é a porta de entrada usada tanto pela CLI quanto pela tela.
 type Manager interface {
+	// Catalog devolve as tools e o estado de cada origem consultada.
+	Catalog(ctx context.Context) (Catalog, error)
 	List(ctx context.Context) ([]Listing, error)
-	Install(ctx context.Context, id string) (toolinstall.Installation, error)
+	// Install aceita o ID simples ou a referência qualificada "origem/id".
+	Install(ctx context.Context, ref string) (toolinstall.Installation, error)
+	Sources(ctx context.Context) ([]Origin, error)
+	AddSource(ctx context.Context, origin Origin) error
+	RemoveSource(ctx context.Context, name string) error
+	SetSourceEnabled(ctx context.Context, name string, enabled bool) error
 }
 
 type Config struct {
-	Platform        string
-	EngineVersion   string
-	Protocol        VersionRange
-	Validation      ValidationOptions
+	Platform      string
+	EngineVersion string
+	Protocol      VersionRange
+	Validation    ValidationOptions
+	// BuiltinSources são as origens que acompanham a engine, em ordem de
+	// prioridade decrescente de confiança.
+	BuiltinSources []Origin
+	Sources        SourceStore
+	// Index e Packages recebem a origem em cada chamada; o composition root
+	// pode entregar um roteador que escolhe HTTP ou disco pelo tipo dela.
 	Index           IndexSource
 	Packages        PackageSource
 	Installer       toolinstall.Manager
@@ -250,49 +302,160 @@ var _ Manager = (*Service)(nil)
 
 func NewService(config Config) *Service { return &Service{config: config} }
 
-func (s *Service) List(ctx context.Context) ([]Listing, error) {
-	index, err := s.loadIndex(ctx)
+// Catalog consulta todas as origens habilitadas e resolve as tools visíveis
+// nesta plataforma. Uma origem fora do ar não impede as demais de aparecer:
+// o erro dela viaja em SourceStatus para a tela mostrar sem esconder o resto.
+func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
+	index, statuses, err := s.fetch(ctx)
 	if err != nil {
-		return nil, err
+		return Catalog{Sources: statuses}, err
 	}
 	installed, err := s.config.Installer.ListInstalled(ctx)
 	if err != nil {
-		return nil, err
+		return Catalog{Sources: statuses}, err
 	}
 	active := make(map[string]string, len(installed))
 	for _, item := range installed {
 		active[item.ID] = item.ActiveVersion
 	}
 
-	ids := make(map[string]bool, len(index.Tools))
+	ids := make([]string, 0, len(index.Tools))
+	publishers := make(map[string][]string, len(index.Tools))
 	for _, entry := range index.Tools {
-		ids[entry.ID] = true
+		if _, seen := publishers[entry.ID]; !seen {
+			ids = append(ids, entry.ID)
+		}
+		publishers[entry.ID] = appendUnique(publishers[entry.ID], entry.Origin.Name)
 	}
+
 	listings := make([]Listing, 0, len(ids))
-	for id := range ids {
+	for _, id := range ids {
 		entry, _, selectErr := index.SelectLatest(id, s.config.Platform, s.config.EngineVersion, s.config.Protocol)
 		if selectErr != nil {
 			continue
 		}
 		current := active[id]
+		shadowed := make([]string, 0, len(publishers[id]))
+		for _, name := range publishers[id] {
+			if name != entry.Origin.Name {
+				shadowed = append(shadowed, name)
+			}
+		}
 		listings = append(listings, Listing{
 			Entry: entry, InstalledVersion: current,
 			UpdateAvailable: current != "" && versionLess(current, entry.Version),
+			Shadowed:        shadowed,
 		})
 	}
 	sort.Slice(listings, func(i, j int) bool {
-		return strings.ToLower(listings[i].Name) < strings.ToLower(listings[j].Name)
+		if left, right := strings.ToLower(listings[i].Name), strings.ToLower(listings[j].Name); left != right {
+			return left < right
+		}
+		return listings[i].Origin.Priority < listings[j].Origin.Priority
 	})
-	return listings, nil
+	return Catalog{Tools: listings, Sources: statuses}, nil
 }
 
-func (s *Service) Install(ctx context.Context, id string) (toolinstall.Installation, error) {
-	if strings.TrimSpace(id) == "" {
+func (s *Service) List(ctx context.Context) ([]Listing, error) {
+	catalog, err := s.Catalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.Tools, nil
+}
+
+// fetch consulta as origens habilitadas em paralelo. Sequencial, uma origem
+// lenta atrasaria todas as outras; e como o marketplace agora é a soma de
+// vários repositórios, essa espera cresceria a cada um que o usuário
+// adicionasse.
+func (s *Service) fetch(ctx context.Context) (Index, []SourceStatus, error) {
+	if s.config.Index == nil || s.config.Packages == nil || s.config.Installer == nil {
+		return Index{}, nil, errors.New("marketplace não configurado")
+	}
+	origins, err := s.Sources(ctx)
+	if err != nil {
+		return Index{}, nil, err
+	}
+	enabled := make([]Origin, 0, len(origins))
+	for _, origin := range origins {
+		if origin.Enabled {
+			enabled = append(enabled, origin)
+		}
+	}
+	if len(enabled) == 0 {
+		return Index{}, nil, errors.New("nenhuma origem de tools habilitada")
+	}
+
+	statuses := make([]SourceStatus, len(enabled))
+	collected := make([][]Entry, len(enabled))
+	var group sync.WaitGroup
+	for position, origin := range enabled {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			entries, fetchErr := s.fetchOrigin(ctx, origin)
+			collected[position] = entries
+			statuses[position] = SourceStatus{Origin: origin, Tools: len(entries), Err: fetchErr}
+		}()
+	}
+	group.Wait()
+
+	aggregate := Index{APIVersion: APIVersion}
+	failures := 0
+	for position := range enabled {
+		if statuses[position].Err != nil {
+			failures++
+			continue
+		}
+		aggregate.Tools = append(aggregate.Tools, collected[position]...)
+	}
+	if failures == len(enabled) {
+		return Index{}, statuses, fmt.Errorf("nenhuma origem respondeu; %s: %w",
+			statuses[0].Origin.Name, statuses[0].Err)
+	}
+	return aggregate, statuses, nil
+}
+
+// fetchOrigin lê e valida um índice isoladamente, para que um repositório
+// malformado seja rejeitado inteiro sem contaminar os demais.
+func (s *Service) fetchOrigin(ctx context.Context, origin Origin) ([]Entry, error) {
+	index, err := s.config.Index.Fetch(ctx, origin)
+	if err != nil {
+		return nil, err
+	}
+	options := s.config.Validation
+	options.Local = origin.Kind == OriginLocal
+	if err := index.Validate(options); err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(index.Tools))
+	for _, entry := range index.Tools {
+		// O canal é uma afirmação sobre a revisão editorial da engine, não
+		// sobre o índice. Um repositório paralelo que se declarasse official
+		// compraria o selo apenas editando o próprio JSON.
+		if !origin.Trusted {
+			entry.DistributionTier = ChannelCommunity
+		}
+		entry.Origin = origin
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func (s *Service) Install(ctx context.Context, ref string) (toolinstall.Installation, error) {
+	originName, id := splitRef(ref)
+	if id == "" {
 		return toolinstall.Installation{}, errors.New("ID da tool é obrigatório")
 	}
-	index, err := s.loadIndex(ctx)
+	index, _, err := s.fetch(ctx)
 	if err != nil {
 		return toolinstall.Installation{}, err
+	}
+	if originName != "" {
+		index = index.fromOrigin(originName)
+		if len(index.Tools) == 0 {
+			return toolinstall.Installation{}, fmt.Errorf("%s: %w", originName, ErrSourceNotFound)
+		}
 	}
 	entry, artifact, err := index.SelectLatest(id, s.config.Platform, s.config.EngineVersion, s.config.Protocol)
 	if err != nil {
@@ -308,7 +471,7 @@ func (s *Service) Install(ctx context.Context, id string) (toolinstall.Installat
 		}
 	}
 
-	prepared, err := s.config.Packages.Prepare(ctx, artifact)
+	prepared, err := s.config.Packages.Prepare(ctx, entry.Origin, artifact)
 	if err != nil {
 		return toolinstall.Installation{}, err
 	}
@@ -337,18 +500,55 @@ func (s *Service) Install(ctx context.Context, id string) (toolinstall.Installat
 	return installation, nil
 }
 
-func (s *Service) loadIndex(ctx context.Context) (Index, error) {
-	if s.config.Index == nil || s.config.Packages == nil || s.config.Installer == nil {
-		return Index{}, errors.New("marketplace não configurado")
+// fromOrigin recorta o índice agregado para uma única origem, usado quando a
+// instalação é pedida pela referência qualificada.
+func (i Index) fromOrigin(name string) Index {
+	filtered := Index{APIVersion: i.APIVersion}
+	for _, entry := range i.Tools {
+		if entry.Origin.Name == name {
+			filtered.Tools = append(filtered.Tools, entry)
+		}
 	}
-	index, err := s.config.Index.Fetch(ctx)
-	if err != nil {
-		return Index{}, err
+	return filtered
+}
+
+// splitRef separa "origem/id" de um ID simples.
+func splitRef(ref string) (string, string) {
+	ref = strings.TrimSpace(ref)
+	origin, id, qualified := strings.Cut(ref, "/")
+	if !qualified {
+		return "", ref
 	}
-	if err := index.Validate(s.config.Validation); err != nil {
-		return Index{}, err
+	return strings.TrimSpace(origin), strings.TrimSpace(id)
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
 	}
-	return index, nil
+	return append(values, value)
+}
+
+// validLocalPath aceita o caminho de um artefato em disco relativo ao índice.
+// Absolutos e travessias são recusados para que um índice local baixado de
+// terceiros não consiga apontar para fora do próprio repositório.
+func validLocalPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+		return false
+	}
+	normalized := strings.ReplaceAll(value, `\`, "/")
+	if strings.HasPrefix(normalized, "/") || strings.Contains(normalized, ":") {
+		return false
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validSemver(value string) bool {
