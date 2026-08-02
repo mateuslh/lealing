@@ -15,6 +15,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/mateuslh/lealing/sdk/protocol"
 )
@@ -94,6 +96,11 @@ func Run(ctx context.Context, config Config) error {
 	if config.MaxMessageSize <= 0 {
 		config.MaxMessageSize = protocol.MaxMessageSize
 	}
+	// A tool escreve em um pipe, não em um TTY; sem este perfil o Lip Gloss
+	// detecta saída não interativa e remove todas as cores antes do snapshot.
+	// A engine continua sanitizando SGR e convertendo o frame para o terminal
+	// do usuário, portanto forçar ANSI aqui não libera sequências perigosas.
+	lipgloss.SetColorProfile(termenv.TrueColor)
 	decoder := protocol.NewDecoderSize(config.Input, config.MaxMessageSize)
 	encoder := protocol.NewEncoderSize(config.Output, config.MaxMessageSize)
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mateuslh/lealing/sdk/protocol"
 	"github.com/mateuslh/lealing/sdk/screen"
@@ -18,6 +19,14 @@ type loadedMsg struct{}
 type model struct {
 	body      string
 	capturing bool
+}
+
+type colorModel struct{}
+
+func (colorModel) Init() tea.Cmd                          { return nil }
+func (colorModel) Update(tea.Msg) (screen.Model, tea.Cmd) { return colorModel{}, nil }
+func (colorModel) View(protocol.Frame) string {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("#ff6688")).Bold(true).Render("cor")
 }
 
 func (m *model) Init() tea.Cmd { return func() tea.Msg { return loadedMsg{} } }
@@ -133,6 +142,43 @@ func TestRuntimeNegociaExecutaComandoEEntregaEventos(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("runtime não encerrou")
+	}
+}
+
+func TestRuntimePreservaANSIParaPaletaDaTool(t *testing.T) {
+	toolInput, engineInput := io.Pipe()
+	engineOutput, toolOutput := io.Pipe()
+	encoder, decoder := protocol.NewEncoder(engineInput), protocol.NewDecoder(engineOutput)
+	done := make(chan error, 1)
+	go func() {
+		done <- screen.Run(context.Background(), screen.Config{
+			ToolVersion: "1.0.0", Protocol: protocol.VersionRange{Min: 1, Max: 1},
+			Factory: func(screen.Session) screen.Model { return colorModel{} },
+			Input:   toolInput, Output: toolOutput,
+		})
+	}()
+	defer func() {
+		_ = engineInput.Close()
+		_ = engineOutput.Close()
+	}()
+	initialize := protocol.Initialize{Protocol: protocol.VersionRange{Min: 1, Max: 1}, ToolID: "colors", Frame: protocol.Frame{Width: 20, Height: 5}}
+	message, err := protocol.NewMessage(1, 1, protocol.MethodInitialize, initialize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Write(message); err != nil {
+		t.Fatal(err)
+	}
+	response, err := decoder.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := protocol.DecodePayload[protocol.Initialized](response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Snapshot == nil || !strings.Contains(snapshot.Snapshot.Body, "\x1b[") {
+		t.Fatalf("snapshot perdeu ANSI: %q", snapshot.Snapshot.Body)
 	}
 }
 
