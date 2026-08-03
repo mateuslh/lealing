@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -59,6 +60,15 @@ type Removal struct {
 	RecoveryDir string
 }
 
+// Reconciliation descreve uma troca declarativa do catálogo instalado.
+// RecoveryDir preserva o estado anterior inteiro para rollback caso outra
+// parte da mesma operação (como a persistência de origens) falhe depois.
+type Reconciliation struct {
+	Changed         int
+	RecoveryDir     string
+	PreviousPresent bool
+}
+
 // Store é a porta de saída que realiza as mutações recuperáveis no diretório
 // de tools.
 type Store interface {
@@ -75,6 +85,21 @@ type Manager interface {
 	ListInstalled(ctx context.Context) ([]Installed, error)
 	Rollback(ctx context.Context, id string) (Installation, error)
 	Remove(ctx context.Context, id string) (Removal, error)
+}
+
+// ReconcileStore troca atomicamente o conjunto instalado pela lista pedida.
+// SourceDir vazio reutiliza a versão já instalada indicada por ExpectedID e
+// ExpectedVersion; preenchido instala o pacote previamente preparado.
+type ReconcileStore interface {
+	Reconcile(ctx context.Context, requests []InstallRequest) (Reconciliation, error)
+	Restore(ctx context.Context, reconciliation Reconciliation) error
+}
+
+// Reconciler é a capacidade opcional usada por operações declarativas. Ela
+// fica separada de Manager para que instalações unitárias continuem simples.
+type Reconciler interface {
+	Reconcile(ctx context.Context, requests []InstallRequest) (Reconciliation, error)
+	Restore(ctx context.Context, reconciliation Reconciliation) error
 }
 
 type Service struct{ store Store }
@@ -117,4 +142,31 @@ func (s *Service) Remove(ctx context.Context, id string) (Removal, error) {
 		return Removal{}, errors.New("ID da tool é obrigatório")
 	}
 	return s.store.Remove(ctx, id)
+}
+
+func (s *Service) Reconcile(ctx context.Context, requests []InstallRequest) (Reconciliation, error) {
+	store, ok := s.store.(ReconcileStore)
+	if !ok {
+		return Reconciliation{}, errors.New("instalador não oferece reconciliação atômica")
+	}
+	for index := range requests {
+		requests[index].Host = strings.TrimSpace(requests[index].Host)
+		requests[index].ExpectedID = strings.TrimSpace(requests[index].ExpectedID)
+		requests[index].ExpectedVersion = strings.TrimSpace(requests[index].ExpectedVersion)
+		if !validHost.MatchString(requests[index].Host) {
+			return Reconciliation{}, fmt.Errorf("host da tool %s é inválido", requests[index].ExpectedID)
+		}
+		if requests[index].ExpectedID == "" || requests[index].ExpectedVersion == "" {
+			return Reconciliation{}, errors.New("reconciliação exige ID e versão esperados")
+		}
+	}
+	return store.Reconcile(ctx, requests)
+}
+
+func (s *Service) Restore(ctx context.Context, reconciliation Reconciliation) error {
+	store, ok := s.store.(ReconcileStore)
+	if !ok {
+		return errors.New("instalador não oferece restauração atômica")
+	}
+	return store.Restore(ctx, reconciliation)
 }

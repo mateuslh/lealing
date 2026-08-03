@@ -147,7 +147,7 @@ func Wire(opts Options) (*App, error) {
 	)
 	syncManager := newSyncManager(
 		opts.Version, directories, config, usageStore,
-		marketplaceSourceStore(directories), toolManager, repo, indexURL,
+		marketplaceSourceStore(directories), toolManager, repo, indexURL, marketplaceSvc,
 	)
 	// Um Service só, reaproveitado pela tela de configuração e pelo selo da
 	// home: as duas verificações continuam independentes, mas não há motivo

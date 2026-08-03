@@ -697,6 +697,10 @@ lealing -marketplace
 lealing -tool-install example-local/example-tool
 ```
 
+Remover uma origem desinstala em cascata as tools instaladas por ela. A troca
+do conjunto é atômica e o estado anterior permanece num diretório de
+recuperação; desabilitar a origem apenas impede novas consultas ao índice.
+
 Em origem local, `artifact.url` é um diretório relativo ao `index.json`, não
 pode subir com `..` nem escapar por symlink e precisa omitir checksum. O
 manifest do diretório continua sendo revalidado na instalação.

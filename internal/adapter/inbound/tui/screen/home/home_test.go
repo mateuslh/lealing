@@ -620,7 +620,9 @@ func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installatio
 }
 func (fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) { return nil, nil }
 func (fakeMarketplace) AddSource(context.Context, coremarket.Origin) error   { return nil }
-func (fakeMarketplace) RemoveSource(context.Context, string) error           { return nil }
+func (fakeMarketplace) RemoveSource(_ context.Context, name string) (coremarket.SourceRemoval, error) {
+	return coremarket.SourceRemoval{Name: name}, nil
+}
 func (fakeMarketplace) SetSourceEnabled(context.Context, string, bool) error { return nil }
 
 func marketListing(id, name string, installed string, update bool) coremarket.Listing {

@@ -355,10 +355,15 @@ func TestValidateRecusaDocumentoIncoerente(t *testing.T) {
 	duplicateSource.Sources = []usersync.MarketplaceSource{
 		{Name: "x", Kind: "local", Ref: "/tmp/x"}, {Name: "x", Kind: "local", Ref: "/tmp/x"},
 	}
+	duplicateToolID := valid()
+	duplicateToolID.Tools = []usersync.InstalledTool{
+		{Host: "alfa", ID: "example-tool", Version: "1.0.0"},
+		{Host: "beta", ID: "example-tool", Version: "2.0.0"},
+	}
 	for name, state := range map[string]usersync.State{
 		"uso sem id": usageWithoutID, "uso sem host": usageWithoutHost,
 		"uso duplicado": duplicateUsage, "origem sem ref": sourceWithoutRef,
-		"origem duplicada": duplicateSource,
+		"origem duplicada": duplicateSource, "ID de tool duplicado": duplicateToolID,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := state.Validate(); err == nil {

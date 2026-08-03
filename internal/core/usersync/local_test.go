@@ -56,6 +56,17 @@ func (s *localSourceStore) Save(_ context.Context, state marketplace.SourceState
 	return nil
 }
 
+type localReconciler struct {
+	request marketplace.StateReconcileRequest
+	result  marketplace.StateReconciliation
+	err     error
+}
+
+func (r *localReconciler) ReconcileState(_ context.Context, request marketplace.StateReconcileRequest) (marketplace.StateReconciliation, error) {
+	r.request = request
+	return r.result, r.err
+}
+
 type localCatalog struct{ tools map[domain.ToolID]domain.Tool }
 
 func (c localCatalog) All(context.Context) ([]domain.Tool, error) {
@@ -85,7 +96,7 @@ func TestLocalStateResolveHostLegadoEPreservaProvenienciaInstalada(t *testing.T)
 		"example-tool": {Host: "lealing", ID: "example-tool"},
 	}}
 
-	state, err := usersync.NewLocalState(usage, nil, installed, catalog, nil).Collect(context.Background())
+	state, err := usersync.NewLocalState(usage, nil, installed, catalog, nil, nil).Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +113,7 @@ func TestLocalStateNaoAplicaPreferenciaEmToolHomonima(t *testing.T) {
 	catalog := localCatalog{tools: map[domain.ToolID]domain.Tool{
 		"example-tool": {Host: "outro-host", ID: "example-tool"},
 	}}
-	local := usersync.NewLocalState(usage, nil, nil, catalog, nil)
+	local := usersync.NewLocalState(usage, nil, nil, catalog, nil, nil)
 	state := usersync.State{Usage: []usersync.ToolUsage{{
 		Host: "lealing", ID: "example-tool", Runs: 9, Favorite: true,
 	}}}
@@ -119,7 +130,7 @@ func TestLocalStateNaoAplicaPreferenciaEmToolHomonima(t *testing.T) {
 
 func TestLocalStateGuardaPreferenciaDeToolAindaNaoInstalada(t *testing.T) {
 	usage := &localUsageStore{}
-	local := usersync.NewLocalState(usage, nil, nil, localCatalog{}, nil)
+	local := usersync.NewLocalState(usage, nil, nil, localCatalog{}, nil, nil)
 	state := usersync.State{Usage: []usersync.ToolUsage{{
 		Host: "lealing", ID: "example-tool", Runs: 4, Favorite: true,
 	}}}
@@ -148,7 +159,7 @@ func TestLocalStatePublicaOrigensEmbutidasEReferenciaCadaToolAoHostCorreto(t *te
 		Ref: "https://example.test/lealing/index.json", Trusted: true, Builtin: true, Enabled: true,
 	}}
 
-	state, err := usersync.NewLocalState(nil, sources, installed, nil, builtins).
+	state, err := usersync.NewLocalState(nil, sources, installed, nil, builtins, nil).
 		Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +182,7 @@ func TestLocalStateNaoPersisteOrigemEmbutidaRecebidaComoCustom(t *testing.T) {
 		Name: "lealing", Kind: marketplace.OriginRemote,
 		Ref: "https://example.test/canonical/index.json", Trusted: true, Builtin: true, Enabled: true,
 	}}
-	local := usersync.NewLocalState(nil, sources, nil, nil, builtins)
+	local := usersync.NewLocalState(nil, sources, nil, nil, builtins, nil)
 	state := usersync.State{Sources: []usersync.MarketplaceSource{
 		{Name: "lealing", Kind: "remote", Ref: "https://example.test/forged/index.json", Enabled: false},
 		{Name: "partner", Kind: "remote", Ref: "https://example.test/partner/index.json", Enabled: true},
@@ -190,5 +201,52 @@ func TestLocalStateNaoPersisteOrigemEmbutidaRecebidaComoCustom(t *testing.T) {
 	}
 	if len(sources.state.DisabledBuiltins) != 1 || sources.state.DisabledBuiltins[0] != "lealing" {
 		t.Fatalf("origens embutidas desativadas = %+v", sources.state.DisabledBuiltins)
+	}
+}
+
+func TestLocalStateAplicaOrigensEToolsComoUmaIntencaoExata(t *testing.T) {
+	sources := &localSourceStore{}
+	reconciler := &localReconciler{result: marketplace.StateReconciliation{Sources: 1, Tools: 2}}
+	local := usersync.NewLocalState(nil, sources, nil, nil, nil, reconciler)
+	state := usersync.State{
+		Sources: []usersync.MarketplaceSource{{
+			Name: "parceiro", Kind: "remote", Ref: "https://parceiro.test/index.json", Enabled: true,
+		}},
+		Tools: []usersync.InstalledTool{
+			{Host: "parceiro", ID: "example-tool", Version: "1.2.3"},
+			{Host: "parceiro", ID: "another-tool", Version: "2.0.0"},
+		},
+	}
+
+	applied, err := local.Apply(context.Background(), state, usersync.Selection{
+		usersync.SectionSources: true, usersync.SectionTools: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.request.Sources == nil || len(reconciler.request.Sources.Custom) != 1 || !reconciler.request.ExactTools {
+		t.Fatalf("intenção recebida = %+v", reconciler.request)
+	}
+	if len(reconciler.request.Tools) != 2 || reconciler.request.Tools[0].Version != "1.2.3" {
+		t.Fatalf("tools desejadas = %+v", reconciler.request.Tools)
+	}
+	if applied[usersync.SectionSources] != 1 || applied[usersync.SectionTools] != 2 {
+		t.Fatalf("aplicado = %+v", applied)
+	}
+}
+
+func TestCollectNaoPublicaInstalacaoLocalSemOrigemReproduzivel(t *testing.T) {
+	sources := &localSourceStore{}
+	installed := &localInstalled{tools: []toolinstall.Installed{{
+		Host: "local", ID: "example-tool", ActiveVersion: "1.0.0",
+	}}}
+
+	state, err := usersync.NewLocalState(nil, sources, installed, nil, nil, nil).
+		Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Tools) != 0 {
+		t.Fatalf("instalação irreproduzível foi publicada: %+v", state.Tools)
 	}
 }

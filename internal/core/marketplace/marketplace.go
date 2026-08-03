@@ -231,6 +231,30 @@ func (i Index) SelectLatest(id, platform, engineVersion string, protocol Version
 	return candidates[0].entry, candidates[0].artifact, nil
 }
 
+// SelectVersion resolve uma versão exata. Sincronização declarativa não pode
+// trocar silenciosamente X.Y.Z pela release mais recente: o snapshot remoto
+// é a fonte da verdade também para downgrade e reprodução histórica.
+func (i Index) SelectVersion(id, version, platform, engineVersion string, protocol VersionRange) (Entry, Artifact, error) {
+	for _, entry := range i.Tools {
+		if entry.ID != id || entry.Version != version || entry.Protocol.Max < protocol.Min || protocol.Max < entry.Protocol.Min {
+			continue
+		}
+		minimum, minOK := parseVersion(entry.MinimumEngine)
+		engine, engineOK := parseVersion(engineVersion)
+		development := engineVersion == "dev" || strings.HasSuffix(engineVersion, "-dev")
+		if entry.MinimumEngine != "" && (!minOK || (!development && (!engineOK || less(engine, minimum)))) {
+			continue
+		}
+		for _, artifact := range entry.Artifacts {
+			usable := validSHA256(artifact.SHA256) || (entry.Origin.Kind == OriginLocal && artifact.SHA256 == "")
+			if artifact.Platform == platform && artifact.URL != "" && usable {
+				return entry, artifact, nil
+			}
+		}
+	}
+	return Entry{}, Artifact{}, ErrNotAvailable
+}
+
 // IndexSource lê o índice de uma origem. Implementações podem usar HTTP,
 // arquivo local ou um cache assinado sem alterar o caso de uso.
 type IndexSource interface {
@@ -275,7 +299,7 @@ type Manager interface {
 	Install(ctx context.Context, ref string) (toolinstall.Installation, error)
 	Sources(ctx context.Context) ([]Origin, error)
 	AddSource(ctx context.Context, origin Origin) error
-	RemoveSource(ctx context.Context, name string) error
+	RemoveSource(ctx context.Context, name string) (SourceRemoval, error)
 	SetSourceEnabled(ctx context.Context, name string, enabled bool) error
 }
 
@@ -296,7 +320,10 @@ type Config struct {
 	CatalogReloader CatalogReloader
 }
 
-type Service struct{ config Config }
+type Service struct {
+	config   Config
+	mutation sync.Mutex
+}
 
 var _ Manager = (*Service)(nil)
 
@@ -478,18 +505,7 @@ func (s *Service) Install(ctx context.Context, ref string) (toolinstall.Installa
 	if prepared.Cleanup != nil {
 		defer prepared.Cleanup()
 	}
-	installation, err := s.config.Installer.InstallLocal(ctx, toolinstall.InstallRequest{
-		Host: entry.Origin.Name, SourceDir: prepared.Directory,
-		ExpectedID: entry.ID, ExpectedVersion: entry.Version,
-		ExpectedManifest: &toolinstall.ManifestExpectation{
-			ID: entry.ID, Version: entry.Version, Name: entry.Name, Summary: entry.Summary,
-			Detail: entry.Detail, Category: entry.Category, Risk: entry.Risk, Glyph: entry.Glyph,
-			ProtocolMin: entry.Protocol.Min, ProtocolMax: entry.Protocol.Max,
-			FilesystemRead:  append([]string(nil), entry.Permissions.Filesystem.Read...),
-			FilesystemWrite: append([]string(nil), entry.Permissions.Filesystem.Write...),
-			Network:         entry.Permissions.Network, Subprocess: entry.Permissions.Subprocess,
-		},
-	})
+	installation, err := s.config.Installer.InstallLocal(ctx, installRequest(entry, prepared.Directory))
 	if err != nil {
 		return toolinstall.Installation{}, err
 	}

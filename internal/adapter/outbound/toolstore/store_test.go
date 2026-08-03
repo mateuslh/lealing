@@ -191,3 +191,61 @@ func TestRemoveMoveParaDiretorioRecuperavel(t *testing.T) {
 		t.Fatal("tool continuou ativa")
 	}
 }
+
+func TestReconcileTrocaConjuntoInteiroEPodeRestaurar(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tools")
+	s := store(root)
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{
+		Host: "origem-antiga", SourceDir: source(t, "1.0.0", "antiga"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := s.Reconcile(context.Background(), []toolinstall.InstallRequest{{
+		Host: "origem-nova", SourceDir: source(t, "2.0.0", "nova"),
+		ExpectedID: "demo", ExpectedVersion: "2.0.0",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := s.List(context.Background())
+	if err != nil || len(installed) != 1 || installed[0].Host != "origem-nova" || installed[0].ActiveVersion != "2.0.0" {
+		t.Fatalf("estado reconciliado = %+v, erro = %v", installed, err)
+	}
+	if result.Changed != 1 || result.RecoveryDir == "" || !strings.Contains(result.RecoveryDir, string(filepath.Separator)+".trash"+string(filepath.Separator)) {
+		t.Fatalf("reconciliação = %+v", result)
+	}
+
+	if err := s.Restore(context.Background(), result); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = s.List(context.Background())
+	if err != nil || len(installed) != 1 || installed[0].Host != "origem-antiga" || installed[0].ActiveVersion != "1.0.0" {
+		t.Fatalf("estado restaurado = %+v, erro = %v", installed, err)
+	}
+}
+
+func TestReconcileFalhaAntesDaTrocaEDeixaEstadoAtivoIntacto(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tools")
+	s := store(root)
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{
+		Host: "lealing", SourceDir: source(t, "1.0.0", "saudavel"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	broken := source(t, "2.0.0", "quebrada")
+	if err := os.WriteFile(filepath.Join(broken, "manifest.yaml"), []byte("inválido"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.Reconcile(context.Background(), []toolinstall.InstallRequest{{
+		Host: "lealing", SourceDir: broken, ExpectedID: "demo", ExpectedVersion: "2.0.0",
+	}})
+	if err == nil {
+		t.Fatal("reconciliação inválida terminou sem erro")
+	}
+	installed, listErr := s.List(context.Background())
+	if listErr != nil || len(installed) != 1 || installed[0].ActiveVersion != "1.0.0" {
+		t.Fatalf("estado após falha = %+v, erro = %v", installed, listErr)
+	}
+}

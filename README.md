@@ -143,9 +143,10 @@ lealing -logout
 ```
 
 Três seções, ligadas e desligadas separadamente: **favoritos e uso**,
-**origens do marketplace** e **tools instaladas** — desta última só a lista
-viaja, porque instalar código de terceiros continua sendo uma decisão sua,
-tool a tool, no marketplace.
+**origens do marketplace** e **tools instaladas**. Ao baixar a última seção,
+o lealing reconcilia `host/id@version`: prepara todos os pacotes e só então
+troca atomicamente o conjunto local, instalando, atualizando, rebaixando ou
+removendo o necessário para reproduzir o snapshot.
 
 Na TUI (`c` → **Conta** → `gerenciar →`), a tela larga mostra o escopo e as
 operações (enviar, baixar, desconectar) em painéis lado a lado; `↑↓` percorre
@@ -160,6 +161,8 @@ para que os `host`s delas tenham procedência explícita; ao baixar, endereço e
 confiança dessas origens continuam vindo da engine e só o estado habilitado é
 aplicado. A leitura também recusa campos desconhecidos,
 duplicados, coleções acima dos limites e referências ou versões inválidas.
+Instalações locais avulsas, sem uma origem reproduzível, não entram no
+snapshot e não são apagadas por ele.
 
 O que nunca sai da máquina: credenciais. As contas do Claude Code, os tokens
 do cofre e qualquer segredo ficam onde estão — repositório privado não é
@@ -236,6 +239,10 @@ O nome é derivado do endereço quando você não passa `-source-name`. Na TUI,
 `⇄` abre a aba de origens: `a` cadastra, `espaço` liga e desliga, `d` remove.
 As origens ficam em `~/.config/lealing/marketplace-sources.json`
 (`%APPDATA%\lealing\` no Windows).
+Remover uma origem também remove, de forma recuperável, todas as tools cuja
+procedência é aquela origem; a engine não mantém pacotes órfãos de um host que
+deixou de existir. A CLI e a TUI informam o diretório que guarda o conjunto
+anterior.
 
 Três regras mantêm a descentralização segura:
 

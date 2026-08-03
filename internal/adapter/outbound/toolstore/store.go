@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
@@ -25,6 +26,7 @@ type Store struct {
 	categories map[domain.CategoryID]bool
 	target     toolmanifest.Target
 	now        func() time.Time
+	mutex      sync.Mutex
 }
 
 var validID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -43,6 +45,12 @@ func New(root string, categories []domain.Category, target toolmanifest.Target, 
 }
 
 func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest) (_ toolinstall.Installation, resultErr error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.install(ctx, request)
+}
+
+func (s *Store) install(ctx context.Context, request toolinstall.InstallRequest) (_ toolinstall.Installation, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return toolinstall.Installation{}, err
 	}
@@ -201,6 +209,12 @@ func sameStrings(left, right []string) bool {
 }
 
 func (s *Store) List(ctx context.Context) ([]toolinstall.Installed, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.list(ctx)
+}
+
+func (s *Store) list(ctx context.Context) ([]toolinstall.Installed, error) {
 	entries, err := os.ReadDir(s.root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -232,6 +246,8 @@ func (s *Store) List(ctx context.Context) ([]toolinstall.Installed, error) {
 }
 
 func (s *Store) Rollback(ctx context.Context, id string) (toolinstall.Installation, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if err := safeID(id); err != nil {
 		return toolinstall.Installation{}, err
 	}
@@ -271,6 +287,8 @@ func (s *Store) Rollback(ctx context.Context, id string) (toolinstall.Installati
 }
 
 func (s *Store) Remove(ctx context.Context, id string) (toolinstall.Removal, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if err := safeID(id); err != nil {
 		return toolinstall.Removal{}, err
 	}
@@ -290,6 +308,186 @@ func (s *Store) Remove(ctx context.Context, id string) (toolinstall.Removal, err
 		return toolinstall.Removal{}, err
 	}
 	return toolinstall.Removal{ID: id, RecoveryDir: destination}, nil
+}
+
+// Reconcile monta o estado seguinte fora do diretório ativo e faz a troca
+// somente depois que todos os manifests e executáveis foram revalidados.
+// Assim uma falha no último pacote não deixa metade do snapshot aplicada.
+func (s *Store) Reconcile(ctx context.Context, requests []toolinstall.InstallRequest) (toolinstall.Reconciliation, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	current, err := s.list(ctx)
+	if err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	if err := validateReconcileRequests(requests); err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	changed := reconciliationChanges(current, requests)
+	if changed == 0 {
+		return toolinstall.Reconciliation{}, nil
+	}
+
+	parent := filepath.Dir(s.root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	nextRoot, err := os.MkdirTemp(parent, "."+filepath.Base(s.root)+"-next-")
+	if err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	cleanupNext := true
+	defer func() {
+		if cleanupNext {
+			_ = os.RemoveAll(nextRoot)
+		}
+	}()
+
+	next := New(nextRoot, categoriesFromSet(s.categories), s.target, s.now)
+	for _, request := range requests {
+		if err := ctx.Err(); err != nil {
+			return toolinstall.Reconciliation{}, err
+		}
+		if request.SourceDir == "" {
+			request.SourceDir = filepath.Join(s.root, request.ExpectedID, request.ExpectedVersion)
+		}
+		if _, err := next.install(ctx, request); err != nil {
+			return toolinstall.Reconciliation{}, fmt.Errorf(
+				"preparar %s@%s para reconciliação: %w",
+				request.ExpectedID, request.ExpectedVersion, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+
+	trashRoot := filepath.Join(parent, ".trash")
+	if err := os.MkdirAll(trashRoot, 0o755); err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	recoveryDir, err := reservePath(trashRoot, filepath.Base(s.root)+"-previous-")
+	if err != nil {
+		return toolinstall.Reconciliation{}, err
+	}
+	_, statErr := os.Stat(s.root)
+	previousPresent := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return toolinstall.Reconciliation{}, statErr
+	}
+	if previousPresent {
+		if err := os.Rename(s.root, recoveryDir); err != nil {
+			return toolinstall.Reconciliation{}, fmt.Errorf("guardar estado anterior das tools: %w", err)
+		}
+	}
+	if err := os.Rename(nextRoot, s.root); err != nil {
+		if previousPresent {
+			_ = os.Rename(recoveryDir, s.root)
+		}
+		return toolinstall.Reconciliation{}, fmt.Errorf("ativar estado reconciliado das tools: %w", err)
+	}
+	cleanupNext = false
+	return toolinstall.Reconciliation{
+		Changed: changed, RecoveryDir: recoveryDir, PreviousPresent: previousPresent,
+	}, nil
+}
+
+// Restore desfaz uma reconciliação inteira. O estado substituído também fica
+// recuperável no mesmo caminho, em vez de ser apagado durante o rollback.
+func (s *Store) Restore(ctx context.Context, reconciliation toolinstall.Reconciliation) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if reconciliation.Changed == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !reconciliation.PreviousPresent {
+		if err := os.Rename(s.root, reconciliation.RecoveryDir); err != nil {
+			return fmt.Errorf("guardar estado desfeito das tools: %w", err)
+		}
+		return nil
+	}
+
+	discarded, err := reservePath(
+		filepath.Dir(reconciliation.RecoveryDir), filepath.Base(s.root)+"-discarded-")
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(s.root, discarded); err != nil {
+		return err
+	}
+	if err := os.Rename(reconciliation.RecoveryDir, s.root); err != nil {
+		_ = os.Rename(discarded, s.root)
+		return fmt.Errorf("restaurar estado anterior das tools: %w", err)
+	}
+	if err := os.Rename(discarded, reconciliation.RecoveryDir); err != nil {
+		return fmt.Errorf("estado anterior restaurado, mas o estado desfeito não foi arquivado: %w", err)
+	}
+	return nil
+}
+
+func validateReconcileRequests(requests []toolinstall.InstallRequest) error {
+	seen := make(map[string]bool, len(requests))
+	for _, request := range requests {
+		if err := safeID(request.Host); err != nil {
+			return fmt.Errorf("host da reconciliação: %w", err)
+		}
+		if err := safeID(request.ExpectedID); err != nil {
+			return fmt.Errorf("ID da reconciliação: %w", err)
+		}
+		if strings.TrimSpace(request.ExpectedVersion) == "" || filepath.Base(request.ExpectedVersion) != request.ExpectedVersion || strings.ContainsAny(request.ExpectedVersion, `/\\`) {
+			return errors.New("versão da reconciliação é insegura")
+		}
+		if seen[request.ExpectedID] {
+			return fmt.Errorf("tool duplicada na reconciliação: %s", request.ExpectedID)
+		}
+		seen[request.ExpectedID] = true
+	}
+	return nil
+}
+
+func reconciliationChanges(current []toolinstall.Installed, requests []toolinstall.InstallRequest) int {
+	left := make(map[string]string, len(current))
+	for _, item := range current {
+		left[item.ID] = item.Host + "\x00" + item.ActiveVersion
+	}
+	right := make(map[string]string, len(requests))
+	for _, request := range requests {
+		right[request.ExpectedID] = request.Host + "\x00" + request.ExpectedVersion
+	}
+	changed := 0
+	for id, value := range left {
+		if right[id] != value {
+			changed++
+		}
+	}
+	for id, value := range right {
+		if left[id] == "" && value != "" {
+			changed++
+		}
+	}
+	return changed
+}
+
+func categoriesFromSet(values map[domain.CategoryID]bool) []domain.Category {
+	categories := make([]domain.Category, 0, len(values))
+	for id := range values {
+		categories = append(categories, domain.Category{ID: id})
+	}
+	return categories
+}
+
+func reservePath(parent, pattern string) (string, error) {
+	path, err := os.MkdirTemp(parent, pattern)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (s *Store) validateInstalled(idDir, id, version string) (toolmanifest.Manifest, string, error) {

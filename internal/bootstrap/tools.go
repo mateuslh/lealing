@@ -163,7 +163,7 @@ func newMarketplaceManager(
 	installer toolinstall.Manager,
 	reloader outbound.ReloadableToolRepository,
 	directories xdg.Directories,
-) marketplace.Manager {
+) *marketplace.Service {
 	sources := originRouter{
 		remote: marketplacehttp.New(marketplacehttp.Config{
 			Client:        &http.Client{Timeout: 2 * time.Minute},

@@ -288,10 +288,16 @@ func runToolCommand(
 		return err
 
 	case command.sourceRemove != "":
-		if err := market.RemoveSource(ctx, command.sourceRemove); err != nil {
+		removed, err := market.RemoveSource(ctx, command.sourceRemove)
+		if err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(output, "origem %s removida; as tools já instaladas continuam funcionando\n", command.sourceRemove)
+		if removed.RemovedTools == 0 {
+			_, err = fmt.Fprintf(output, "origem %s removida; nenhuma tool instalada pertencia a ela\n", removed.Name)
+			return err
+		}
+		_, err = fmt.Fprintf(output, "origem %s removida; %d tools removidas; recuperação em %s\n",
+			removed.Name, removed.RemovedTools, removed.RecoveryDir)
 		return err
 
 	case command.sourceEnable != "", command.sourceDisable != "":
@@ -469,8 +475,9 @@ func runSyncCommand(
 				summary[usersync.SectionTools])
 			return err
 		}
-		_, err = fmt.Fprintf(output, "aplicado: %d usos, %d origens\n",
-			result.Applied[usersync.SectionUsage], result.Applied[usersync.SectionSources])
+		_, err = fmt.Fprintf(output, "aplicado: %d usos, %d origens, %d tools\n",
+			result.Applied[usersync.SectionUsage], result.Applied[usersync.SectionSources],
+			result.Applied[usersync.SectionTools])
 		return err
 	}
 	return nil

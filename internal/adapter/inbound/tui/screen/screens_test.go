@@ -45,8 +45,10 @@ func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installatio
 }
 func (f fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) { return f.origins, nil }
 func (fakeMarketplace) AddSource(context.Context, coremarket.Origin) error     { return nil }
-func (fakeMarketplace) RemoveSource(context.Context, string) error             { return nil }
-func (fakeMarketplace) SetSourceEnabled(context.Context, string, bool) error   { return nil }
+func (fakeMarketplace) RemoveSource(_ context.Context, name string) (coremarket.SourceRemoval, error) {
+	return coremarket.SourceRemoval{Name: name}, nil
+}
+func (fakeMarketplace) SetSourceEnabled(context.Context, string, bool) error { return nil }
 
 type fakeManagement []toolmanage.Item
 

@@ -231,6 +231,7 @@ func (s State) Validate() error {
 		return fmt.Errorf("estado remoto excede %d tools instaladas", maxToolEntries)
 	}
 	seenTools := make(map[string]bool, len(s.Tools))
+	seenToolIDs := make(map[string]bool, len(s.Tools))
 	for _, tool := range s.Tools {
 		key := referenceKey(tool.Host, tool.ID)
 		switch {
@@ -242,8 +243,13 @@ func (s State) Validate() error {
 			return fmt.Errorf("versão inválida em %s/%s: %q", tool.Host, tool.ID, tool.Version)
 		case seenTools[key]:
 			return fmt.Errorf("tool instalada duplicada no estado remoto: %s/%s", tool.Host, tool.ID)
+		case seenToolIDs[tool.ID]:
+			// O store local é indexado por ID. Aceitar o mesmo ID de dois hosts
+			// prometeria um estado que nenhuma máquina consegue materializar.
+			return fmt.Errorf("ID de tool instalado por mais de uma origem no estado remoto: %s", tool.ID)
 		}
 		seenTools[key] = true
+		seenToolIDs[tool.ID] = true
 	}
 	return nil
 }

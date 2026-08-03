@@ -63,9 +63,9 @@ func (f *fakeMarketplace) AddSource(_ context.Context, origin marketplace.Origin
 	f.added = origin
 	return nil
 }
-func (f *fakeMarketplace) RemoveSource(_ context.Context, name string) error {
+func (f *fakeMarketplace) RemoveSource(_ context.Context, name string) (marketplace.SourceRemoval, error) {
 	f.removed = name
-	return nil
+	return marketplace.SourceRemoval{Name: name}, nil
 }
 func (f *fakeMarketplace) SetSourceEnabled(_ context.Context, name string, _ bool) error {
 	f.toggled = name

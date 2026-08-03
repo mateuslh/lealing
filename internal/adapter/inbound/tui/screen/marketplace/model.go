@@ -9,6 +9,7 @@ package marketplace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -108,10 +109,9 @@ type Model struct {
 	sheetScroll int
 
 	form *sourceForm
-	// pendingRemoval guarda a origem aguardando confirmação. Remover um
-	// repositório não apaga arquivo nenhum, então o diálogo global de ações
-	// destrutivas seria pesado demais; ainda assim, um "d" acidental não
-	// pode descartar um cadastro em silêncio.
+	// pendingRemoval guarda a origem aguardando confirmação. A cascata remove
+	// as tools daquela procedência, preservando o conjunto anterior para
+	// recuperação.
 	pendingRemoval string
 	// pendingUninstall guarda uma remoção de pacote aguardando confirmação.
 	// Builtins não entram neste estado: elas são desativadas, nunca fingem
@@ -249,12 +249,18 @@ func (m *Model) addSource(origin coremarket.Origin) tea.Cmd {
 func (m *Model) removeSource(name string) tea.Cmd {
 	manager := m.manager
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		if err := manager.RemoveSource(ctx, name); err != nil {
+		removed, err := manager.RemoveSource(ctx, name)
+		if err != nil {
 			return sourceChangedMsg{err: err}
 		}
-		return sourceChangedMsg{message: "origem " + name + " removida"}
+		message := "origem " + name + " removida; nenhuma tool instalada pertencia a ela"
+		if removed.RemovedTools > 0 {
+			message = fmt.Sprintf("origem %s e %d tools removidas; recuperação em %s",
+				name, removed.RemovedTools, removed.RecoveryDir)
+		}
+		return sourceChangedMsg{message: message}
 	}
 }
 

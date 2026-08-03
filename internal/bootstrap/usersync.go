@@ -77,8 +77,10 @@ func SyncManager(engineVersion string) (usersync.Manager, error) {
 	log := outbound.Logger(logging.NewDiscard())
 	catalog := newToolRepository(directories, platform, false, log)
 	indexURL := config.String(settings.KeyMarketplaceIndex)
+	installed := newToolManager(directories.Tools)
+	market := newMarketplaceManager(engineVersion, indexURL, installed, catalog, directories)
 	return newSyncManager(engineVersion, directories, config,
-		usage, marketplaceSourceStore(directories), newToolManager(directories.Tools), catalog, indexURL), nil
+		usage, marketplaceSourceStore(directories), installed, catalog, indexURL, market), nil
 }
 
 func newSyncManager(
@@ -90,6 +92,7 @@ func newSyncManager(
 	installed toolinstall.Manager,
 	catalog outbound.ToolRepository,
 	indexURL string,
+	reconciler marketplace.StateReconciler,
 ) usersync.Manager {
 	client := &http.Client{Timeout: time.Minute}
 	return usersync.NewService(usersync.Config{
@@ -102,7 +105,7 @@ func newSyncManager(
 		),
 		Remote: githubstate.New(githubstate.Config{Client: client}),
 		Local: usersync.NewLocalState(
-			usage, sources, installed, catalog, builtinSources(indexURL),
+			usage, sources, installed, catalog, builtinSources(indexURL), reconciler,
 		),
 		Settings: usersyncstore.NewSettings(
 			filepath.Join(directories.Config, SyncSettingsFileName),

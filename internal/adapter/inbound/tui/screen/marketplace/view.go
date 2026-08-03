@@ -641,7 +641,7 @@ func (m *Model) viewRemoval(th *theme.Theme, width int) string {
 		th.Strong.Render(component.TruncateTail("Remover a origem "+m.pendingRemoval+"?", inner)),
 		"",
 		th.Dim.Render(component.TruncateTail(
-			"As tools já instaladas continuam funcionando; elas só deixam de receber atualizações desta origem.", inner)),
+			"Todas as tools instaladas por esta origem também serão removidas; o estado anterior ficará recuperável.", inner)),
 	)
 	return component.Panel{
 		Title: "confirmar", Glyph: "!", Accent: th.Warning, Focused: true,

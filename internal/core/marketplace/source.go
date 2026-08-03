@@ -226,9 +226,19 @@ var (
 	ErrSourceExists   = errors.New("já existe uma origem com esse nome")
 )
 
+// SourceRemoval informa a extensão da cascata e onde o estado anterior pode
+// ser recuperado.
+type SourceRemoval struct {
+	Name         string
+	RemovedTools int
+	RecoveryDir  string
+}
+
 // Sources devolve as origens conhecidas na ordem de prioridade: as embutidas
 // primeiro, depois as do usuário na ordem em que foram adicionadas.
 func (s *Service) Sources(ctx context.Context) ([]Origin, error) {
+	s.mutation.Lock()
+	defer s.mutation.Unlock()
 	state, err := s.loadState(ctx)
 	if err != nil {
 		return nil, err
@@ -238,6 +248,8 @@ func (s *Service) Sources(ctx context.Context) ([]Origin, error) {
 
 // AddSource registra um repositório paralelo de tools.
 func (s *Service) AddSource(ctx context.Context, origin Origin) error {
+	s.mutation.Lock()
+	defer s.mutation.Unlock()
 	origin.Name = strings.TrimSpace(origin.Name)
 	origin.Label = strings.TrimSpace(origin.Label)
 	origin.Ref = strings.TrimSpace(origin.Ref)
@@ -264,15 +276,17 @@ func (s *Service) AddSource(ctx context.Context, origin Origin) error {
 // RemoveSource esquece uma origem do usuário. As embutidas só podem ser
 // desligadas, para que desativar o índice padrão por engano não deixe a
 // engine sem nenhuma procedência conhecida.
-func (s *Service) RemoveSource(ctx context.Context, name string) error {
+func (s *Service) RemoveSource(ctx context.Context, name string) (SourceRemoval, error) {
+	s.mutation.Lock()
+	defer s.mutation.Unlock()
 	name = strings.TrimSpace(name)
 	state, err := s.loadState(ctx)
 	if err != nil {
-		return err
+		return SourceRemoval{}, err
 	}
 	for _, builtin := range s.config.BuiltinSources {
 		if builtin.Name == name {
-			return fmt.Errorf("%s: %w", name, ErrSourceBuiltin)
+			return SourceRemoval{}, fmt.Errorf("%s: %w", name, ErrSourceBuiltin)
 		}
 	}
 	filtered := make([]Origin, 0, len(state.Custom))
@@ -282,14 +296,20 @@ func (s *Service) RemoveSource(ctx context.Context, name string) error {
 		}
 	}
 	if len(filtered) == len(state.Custom) {
-		return fmt.Errorf("%s: %w", name, ErrSourceNotFound)
+		return SourceRemoval{}, fmt.Errorf("%s: %w", name, ErrSourceNotFound)
 	}
 	state.Custom = filtered
-	return s.saveState(ctx, state)
+	result, err := s.reconcileState(ctx, StateReconcileRequest{Sources: &state})
+	if err != nil {
+		return SourceRemoval{}, err
+	}
+	return SourceRemoval{Name: name, RemovedTools: result.Tools, RecoveryDir: result.RecoveryDir}, nil
 }
 
 // SetSourceEnabled liga ou desliga uma origem sem descartar seu cadastro.
 func (s *Service) SetSourceEnabled(ctx context.Context, name string, enabled bool) error {
+	s.mutation.Lock()
+	defer s.mutation.Unlock()
 	name = strings.TrimSpace(name)
 	state, err := s.loadState(ctx)
 	if err != nil {

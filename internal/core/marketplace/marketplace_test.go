@@ -28,6 +28,21 @@ func TestSelecionaMaisNovaCompativelComEngineProtocoloEPlataforma(t *testing.T) 
 	}
 }
 
+func TestSelecionaVersaoExataParaReproduzirSnapshot(t *testing.T) {
+	older, newer := validEntry(), validEntry()
+	older.Version, newer.Version = "1.0.0", "2.0.0"
+	index := marketplace.Index{Tools: []marketplace.Entry{newer, older}}
+
+	entry, _, err := index.SelectVersion(
+		"demo", "1.0.0", "darwin-arm64", "2.0.0", marketplace.VersionRange{Min: 1, Max: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Version != "1.0.0" {
+		t.Fatalf("versão selecionada = %s", entry.Version)
+	}
+}
+
 func validEntry() marketplace.Entry {
 	return marketplace.Entry{
 		ID: "demo", Version: "1.2.0", Name: "Demo", Summary: "Demonstra uma tool.",
@@ -128,17 +143,27 @@ func (f *fakePackages) Prepare(_ context.Context, origin marketplace.Origin, art
 }
 
 // memorySources é o SourceStore em memória usado pelos testes de origem.
-type memorySources struct{ state marketplace.SourceState }
+type memorySources struct {
+	state   marketplace.SourceState
+	saveErr error
+}
 
 func (m *memorySources) Load(context.Context) (marketplace.SourceState, error) { return m.state, nil }
 func (m *memorySources) Save(_ context.Context, state marketplace.SourceState) error {
+	if m.saveErr != nil {
+		return m.saveErr
+	}
 	m.state = state
 	return nil
 }
 
 type fakeInstaller struct {
-	installed []toolinstall.Installed
-	request   toolinstall.InstallRequest
+	installed   []toolinstall.Installed
+	request     toolinstall.InstallRequest
+	previous    []toolinstall.Installed
+	reconciled  int
+	restored    bool
+	onReconcile func()
 }
 
 func (f *fakeInstaller) InstallLocal(_ context.Context, request toolinstall.InstallRequest) (toolinstall.Installation, error) {
@@ -153,6 +178,45 @@ func (*fakeInstaller) Rollback(context.Context, string) (toolinstall.Installatio
 }
 func (*fakeInstaller) Remove(context.Context, string) (toolinstall.Removal, error) {
 	return toolinstall.Removal{}, errors.New("não usado")
+}
+func (f *fakeInstaller) Reconcile(_ context.Context, requests []toolinstall.InstallRequest) (toolinstall.Reconciliation, error) {
+	if f.onReconcile != nil {
+		f.onReconcile()
+	}
+	f.previous = append([]toolinstall.Installed(nil), f.installed...)
+	next := make([]toolinstall.Installed, 0, len(requests))
+	for _, request := range requests {
+		next = append(next, toolinstall.Installed{
+			Host: request.Host, ID: request.ExpectedID, ActiveVersion: request.ExpectedVersion,
+		})
+	}
+	f.reconciled++
+	left := make(map[string]string, len(f.installed))
+	for _, item := range f.installed {
+		left[item.ID] = item.Host + "\x00" + item.ActiveVersion
+	}
+	right := make(map[string]string, len(next))
+	for _, item := range next {
+		right[item.ID] = item.Host + "\x00" + item.ActiveVersion
+	}
+	changed := 0
+	for id, value := range left {
+		if right[id] != value {
+			changed++
+		}
+	}
+	for id, value := range right {
+		if left[id] == "" && value != "" {
+			changed++
+		}
+	}
+	f.installed = next
+	return toolinstall.Reconciliation{Changed: changed, RecoveryDir: "/tmp/anterior", PreviousPresent: true}, nil
+}
+func (f *fakeInstaller) Restore(context.Context, toolinstall.Reconciliation) error {
+	f.installed = append([]toolinstall.Installed(nil), f.previous...)
+	f.restored = true
+	return nil
 }
 
 type fakeReloader struct{ calls int }
@@ -390,14 +454,93 @@ func TestSourcesAdicionaRemoveEDesliga(t *testing.T) {
 	if origins[0].Enabled {
 		t.Fatal("a origem embutida continuou habilitada")
 	}
-	if err := service.RemoveSource(ctx, "lealing"); !errors.Is(err, marketplace.ErrSourceBuiltin) {
+	if _, err := service.RemoveSource(ctx, "lealing"); !errors.Is(err, marketplace.ErrSourceBuiltin) {
 		t.Fatalf("remoção da embutida = %v", err)
 	}
-	if err := service.RemoveSource(ctx, "alguem-tools"); err != nil {
+	if _, err := service.RemoveSource(ctx, "alguem-tools"); err != nil {
 		t.Fatal(err)
 	}
 	if origins, _ = service.Sources(ctx); len(origins) != 1 {
 		t.Fatalf("origens após remoção = %+v", origins)
+	}
+}
+
+func TestRemoverOrigemRemoveEmCascataSomenteToolsDela(t *testing.T) {
+	store := &memorySources{state: marketplace.SourceState{
+		Custom: []marketplace.Origin{communityOrigin("parceiro")},
+	}}
+	installer := &fakeInstaller{installed: []toolinstall.Installed{
+		{Host: "parceiro", ID: "extra", ActiveVersion: "1.0.0"},
+		{Host: "lealing", ID: "demo", ActiveVersion: "1.2.0"},
+	}}
+	service := newService(marketplace.Config{Sources: store, Installer: installer})
+
+	removed, err := service.RemoveSource(context.Background(), "parceiro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.RemovedTools != 1 || removed.RecoveryDir == "" {
+		t.Fatalf("resultado da remoção = %+v", removed)
+	}
+	if len(store.state.Custom) != 0 {
+		t.Fatalf("origem ainda persistida: %+v", store.state.Custom)
+	}
+	if len(installer.installed) != 1 || installer.installed[0].Host != "lealing" {
+		t.Fatalf("tools após cascata = %+v", installer.installed)
+	}
+}
+
+func TestFalhaAoSalvarOrigemRestauraConjuntoDeTools(t *testing.T) {
+	store := &memorySources{state: marketplace.SourceState{
+		Custom: []marketplace.Origin{communityOrigin("parceiro")},
+	}, saveErr: errors.New("disco cheio")}
+	installer := &fakeInstaller{installed: []toolinstall.Installed{{
+		Host: "parceiro", ID: "extra", ActiveVersion: "1.0.0",
+	}}}
+	service := newService(marketplace.Config{Sources: store, Installer: installer})
+
+	if _, err := service.RemoveSource(context.Background(), "parceiro"); err == nil {
+		t.Fatal("falha do store foi escondida")
+	}
+	if !installer.restored || len(installer.installed) != 1 || installer.installed[0].Host != "parceiro" {
+		t.Fatalf("tools não foram restauradas: %+v, restored=%v", installer.installed, installer.restored)
+	}
+	if len(store.state.Custom) != 1 {
+		t.Fatalf("origem mudou apesar da falha: %+v", store.state.Custom)
+	}
+}
+
+func TestReconcilePublicaOrigemAntesDeAtivarToolNova(t *testing.T) {
+	store := &memorySources{}
+	partner := communityOrigin("parceiro")
+	installer := &fakeInstaller{}
+	bridgeVisible := false
+	installer.onReconcile = func() {
+		bridgeVisible = len(store.state.Custom) == 1 && store.state.Custom[0].Name == "parceiro"
+	}
+	entry := entryFrom("extra", "1.2.0", "community")
+	service := newService(marketplace.Config{
+		BuiltinSources: []marketplace.Origin{},
+		Sources:        store,
+		Installer:      installer,
+		Index: fakeIndex{byOrigin: map[string]marketplace.Index{
+			"parceiro": indexWith(entry),
+		}},
+		Packages: &fakePackages{prepared: marketplace.PreparedPackage{Directory: "/tmp/extra"}},
+	})
+
+	_, err := service.ReconcileState(context.Background(), marketplace.StateReconcileRequest{
+		Sources: &marketplace.SourceState{Custom: []marketplace.Origin{partner}},
+		Tools: []marketplace.DesiredTool{{
+			Host: "parceiro", ID: "extra", Version: "1.2.0",
+		}},
+		ExactTools: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bridgeVisible {
+		t.Fatal("tool foi ativada antes de sua origem ficar persistida")
 	}
 }
 

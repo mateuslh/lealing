@@ -73,9 +73,11 @@ func (f *fakeManager) AddSource(_ context.Context, origin coremarket.Origin) err
 	return f.mutationErr
 }
 
-func (f *fakeManager) RemoveSource(_ context.Context, name string) error {
+func (f *fakeManager) RemoveSource(_ context.Context, name string) (coremarket.SourceRemoval, error) {
 	f.removed = name
-	return f.mutationErr
+	return coremarket.SourceRemoval{
+		Name: name, RemovedTools: 1, RecoveryDir: "/tools/.previous",
+	}, f.mutationErr
 }
 
 func (f *fakeManager) SetSourceEnabled(_ context.Context, name string, enabled bool) error {

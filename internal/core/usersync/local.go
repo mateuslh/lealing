@@ -2,6 +2,7 @@ package usersync
 
 import (
 	"context"
+	"errors"
 	"sort"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
@@ -21,6 +22,7 @@ type LocalState struct {
 	installed      toolinstall.Manager
 	catalog        outbound.ToolRepository
 	builtinSources []marketplace.Origin
+	reconciler     marketplace.StateReconciler
 }
 
 var _ Local = (*LocalState)(nil)
@@ -31,15 +33,21 @@ func NewLocalState(
 	installed toolinstall.Manager,
 	catalog outbound.ToolRepository,
 	builtinSources []marketplace.Origin,
+	reconciler marketplace.StateReconciler,
 ) *LocalState {
 	return &LocalState{
 		usage: usage, sources: sources, installed: installed, catalog: catalog,
 		builtinSources: append([]marketplace.Origin(nil), builtinSources...),
+		reconciler:     reconciler,
 	}
 }
 
 func (l *LocalState) Collect(ctx context.Context) (State, error) {
 	state := State{Version: StateVersion}
+	managedHosts := make(map[string]bool, len(l.builtinSources))
+	for _, origin := range l.builtinSources {
+		managedHosts[origin.Name] = true
+	}
 
 	if l.usage != nil {
 		stored, err := l.usage.Load(ctx)
@@ -94,6 +102,7 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 			if builtins[origin.Name] {
 				continue
 			}
+			managedHosts[origin.Name] = true
 			state.Sources = append(state.Sources, MarketplaceSource{
 				Name: origin.Name, Label: origin.Label,
 				Kind: string(origin.Kind), Ref: origin.Ref, Enabled: origin.Enabled,
@@ -117,6 +126,11 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 			if host == "" {
 				continue
 			}
+			// Instalações avulsas não têm índice capaz de reproduzi-las em
+			// outra máquina. Elas permanecem locais e fora da fonte da verdade.
+			if l.sources != nil && !managedHosts[host] {
+				continue
+			}
 			state.Tools = append(state.Tools, InstalledTool{
 				Host: host, ID: tool.ID, Version: tool.ActiveVersion,
 			})
@@ -129,12 +143,55 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 
 // Apply grava o documento remoto nesta máquina.
 //
-// Instalar tools está deliberadamente fora: baixar e executar código de
-// terceiros é uma decisão que o usuário toma tool a tool, no marketplace, e
-// não algo que um "baixar preferências" possa disparar em silêncio. A lista
-// viaja para a tela poder oferecer a instalação; aplicar é outra coisa.
+// Origens e tools formam uma única intenção declarativa: as origens são
+// resolvidas primeiro, todos os pacotes são preparados e o conjunto instalado
+// só é trocado quando a reprodução inteira pode terminar.
 func (l *LocalState) Apply(ctx context.Context, state State, selection Selection) (Applied, error) {
 	applied := Applied{}
+
+	var nextSources *marketplace.SourceState
+	if selection.Enabled(SectionSources) && l.sources != nil {
+		resolved, count, err := l.resolveSources(ctx, state)
+		if err != nil {
+			return applied, err
+		}
+		nextSources = &resolved
+		applied[SectionSources] = count
+	}
+
+	if nextSources != nil || selection.Enabled(SectionTools) {
+		if l.reconciler == nil {
+			// O fallback mantém testes e composições mínimas capazes de aplicar
+			// somente origens quando não há instalação alguma para reconciliar.
+			if selection.Enabled(SectionTools) || l.installed != nil {
+				return applied, errors.New("reconciliação declarativa de tools não configurada")
+			}
+			if err := l.sources.Save(ctx, *nextSources); err != nil {
+				return applied, err
+			}
+		} else {
+			request := marketplace.StateReconcileRequest{Sources: nextSources}
+			if selection.Enabled(SectionTools) {
+				request.ExactTools = true
+				request.Tools = make([]marketplace.DesiredTool, 0, len(state.Tools))
+				for _, tool := range state.Tools {
+					request.Tools = append(request.Tools, marketplace.DesiredTool{
+						Host: tool.Host, ID: tool.ID, Version: tool.Version,
+					})
+				}
+			}
+			result, err := l.reconciler.ReconcileState(ctx, request)
+			if err != nil {
+				return applied, err
+			}
+			if nextSources != nil {
+				applied[SectionSources] = result.Sources
+			}
+			if selection.Enabled(SectionTools) {
+				applied[SectionTools] = result.Tools
+			}
+		}
+	}
 
 	if selection.Enabled(SectionUsage) && l.usage != nil {
 		for _, usage := range state.Usage {
@@ -155,57 +212,52 @@ func (l *LocalState) Apply(ctx context.Context, state State, selection Selection
 		}
 	}
 
-	if selection.Enabled(SectionSources) && l.sources != nil {
-		current, err := l.sources.Load(ctx)
-		if err != nil {
-			return applied, err
-		}
-		builtins := make(map[string]bool, len(l.builtinSources))
-		for _, origin := range l.builtinSources {
-			builtins[origin.Name] = true
-		}
-		disabled := make(map[string]bool, len(state.DisabledBuiltins))
-		for _, name := range state.DisabledBuiltins {
-			disabled[name] = true
-		}
-		custom := make([]marketplace.Origin, 0, len(state.Sources))
-		for _, source := range state.Sources {
-			if builtins[source.Name] {
-				// O remoto pode sincronizar somente o estado ligado/desligado.
-				// Endereço e confiança da origem embutida pertencem à engine.
-				if source.Enabled {
-					delete(disabled, source.Name)
-				} else {
-					disabled[source.Name] = true
-				}
-				applied[SectionSources]++
-				continue
-			}
-			origin := marketplace.Origin{
-				Name: source.Name, Label: source.Label,
-				Kind: marketplace.OriginKind(source.Kind), Ref: source.Ref, Enabled: source.Enabled,
-			}
-			// Uma origem inválida vinda do remoto é descartada, não propagada:
-			// o documento pode ter sido escrito por uma versão que aceitava
-			// outro formato, ou editado à mão no site.
-			if origin.Validate() != nil {
-				continue
-			}
-			custom = append(custom, origin)
-			applied[SectionSources]++
-		}
-		disabledNames := make([]string, 0, len(disabled))
-		for name := range disabled {
-			disabledNames = append(disabledNames, name)
-		}
-		sort.Strings(disabledNames)
-		current.Custom, current.DisabledBuiltins = custom, disabledNames
-		if err := l.sources.Save(ctx, current); err != nil {
-			return applied, err
-		}
-	}
-
 	return applied, nil
+}
+
+func (l *LocalState) resolveSources(ctx context.Context, state State) (marketplace.SourceState, int, error) {
+	current, err := l.sources.Load(ctx)
+	if err != nil {
+		return marketplace.SourceState{}, 0, err
+	}
+	builtins := make(map[string]bool, len(l.builtinSources))
+	for _, origin := range l.builtinSources {
+		builtins[origin.Name] = true
+	}
+	disabled := make(map[string]bool, len(state.DisabledBuiltins))
+	for _, name := range state.DisabledBuiltins {
+		disabled[name] = true
+	}
+	custom := make([]marketplace.Origin, 0, len(state.Sources))
+	applied := 0
+	for _, source := range state.Sources {
+		if builtins[source.Name] {
+			// Endereço e confiança da origem embutida pertencem à engine.
+			if source.Enabled {
+				delete(disabled, source.Name)
+			} else {
+				disabled[source.Name] = true
+			}
+			applied++
+			continue
+		}
+		origin := marketplace.Origin{
+			Name: source.Name, Label: source.Label,
+			Kind: marketplace.OriginKind(source.Kind), Ref: source.Ref, Enabled: source.Enabled,
+		}
+		if origin.Validate() != nil {
+			continue
+		}
+		custom = append(custom, origin)
+		applied++
+	}
+	disabledNames := make([]string, 0, len(disabled))
+	for name := range disabled {
+		disabledNames = append(disabledNames, name)
+	}
+	sort.Strings(disabledNames)
+	current.Custom, current.DisabledBuiltins = custom, disabledNames
+	return current, applied, nil
 }
 
 // MissingTools lista o que a outra máquina tinha instalado e falta aqui. É o
