@@ -63,6 +63,25 @@ func TestManifestValidoViraToolExterna(t *testing.T) {
 	if tool.Runtime.ProtocolMin != 1 || len(tool.Runtime.Permissions.ReadPaths) != 1 {
 		t.Errorf("runtime = %+v", tool.Runtime)
 	}
+	if tool.WantsMouse() {
+		t.Error("wantsMouse omitido deveria ficar false, deixando o mouse livre para o terminal")
+	}
+}
+
+func TestManifestPropagaWantsMouse(t *testing.T) {
+	raw := strings.Replace(string(validManifest("mouse-tool")), "capabilities:\n    - navigation.back",
+		"capabilities:\n    - navigation.back\n  wantsMouse: true", 1)
+	manifest, err := toolmanifest.ParseAndValidate([]byte(raw), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := manifest.Tool("/instalacao", "/instalacao/lealing-tool-mouse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tool.WantsMouse() {
+		t.Error("ui.wantsMouse: true deveria propagar para tool.WantsMouse()")
+	}
 }
 
 func TestManifestRecusaCamposInvalidos(t *testing.T) {

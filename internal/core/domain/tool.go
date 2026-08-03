@@ -148,7 +148,12 @@ type ExternalRuntime struct {
 	ProtocolMax  int
 	UIMode       string
 	Capabilities []string
-	Permissions  ToolPermissions
+	// WantsMouse declara que a tool precisa receber eventos de mouse (clique,
+	// arraste, roda). É false por padrão: sem essa declaração, a engine não
+	// captura o mouse do terminal, e o usuário pode selecionar texto na tela
+	// normalmente enquanto a tool roda.
+	WantsMouse  bool
+	Permissions ToolPermissions
 }
 
 // ToolPermissions são as concessões declaradas no manifest e apresentadas à
@@ -163,6 +168,14 @@ type ToolPermissions struct {
 // Interactive informa se a tool usa uma sessão screen-v1 dentro do chrome.
 func (t Tool) Interactive() bool {
 	return t.Runtime != nil && t.Runtime.UIMode == "screen-v1"
+}
+
+// WantsMouse informa se a tool declarou que precisa de eventos de mouse. A
+// engine só liga a captura do terminal — trocando seleção nativa de texto
+// pelo encaminhamento de cliques e arraste — enquanto uma tool assim está em
+// primeiro plano.
+func (t Tool) WantsMouse() bool {
+	return t.Runtime != nil && t.Runtime.WantsMouse
 }
 
 // SupportedPlatforms resolve o zero-value de Platforms para AllPlatforms.

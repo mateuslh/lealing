@@ -236,6 +236,20 @@ func TestCloseEncerraSessao(t *testing.T) {
 	}
 }
 
+func TestWantsMouseReflecteOManifest(t *testing.T) {
+	model := plugin.New(deps(), &fakeOpener{}, nil, tool())
+	if model.WantsMouse() {
+		t.Fatal("tool sem ui.wantsMouse não deveria pedir captura de mouse")
+	}
+
+	mouseTool := tool()
+	mouseTool.Runtime.WantsMouse = true
+	model = plugin.New(deps(), &fakeOpener{}, nil, mouseTool)
+	if !model.WantsMouse() {
+		t.Fatal("tool com ui.wantsMouse: true deveria pedir captura de mouse")
+	}
+}
+
 func TestReiniciaDepoisDeFalhaDeInicializacao(t *testing.T) {
 	opener := &fakeOpener{err: errors.New("crash")}
 	model, _ := open(t, opener)

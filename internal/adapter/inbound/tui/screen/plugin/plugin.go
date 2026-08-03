@@ -265,6 +265,12 @@ func (m *Model) Close() tea.Cmd {
 	}
 }
 
+// WantsMouse sinaliza ao Router se o mouse deve ser capturado enquanto esta
+// tela estiver no topo da pilha, para repassar cliques e arraste à tool. É a
+// tool quem decide, via ui.wantsMouse no manifest: por padrão o mouse fica
+// livre para o terminal, permitindo seleção de texto nativa.
+func (m *Model) WantsMouse() bool { return m.tool.WantsMouse() }
+
 func (m *Model) waitUpdate() tea.Cmd {
 	session := m.session
 	return func() tea.Msg {

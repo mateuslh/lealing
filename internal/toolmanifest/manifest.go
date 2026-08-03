@@ -57,6 +57,11 @@ type Runtime struct {
 type UI struct {
 	Mode         string   `json:"mode" yaml:"mode"`
 	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// WantsMouse pede à engine para capturar o mouse do terminal e
+	// encaminhar cliques, arraste e roda à tool. Omitido (ou false), a
+	// engine deixa o terminal livre e o usuário pode selecionar texto na
+	// tela normalmente enquanto a tool roda.
+	WantsMouse bool `json:"wantsMouse,omitempty" yaml:"wantsMouse,omitempty"`
 }
 
 type Requirement struct {
@@ -276,6 +281,7 @@ func (m Manifest) Tool(installDir, executable string) (domain.Tool, error) {
 			InstallDir: installDir, Executable: executable,
 			ProtocolMin: m.Runtime.Protocol.Min, ProtocolMax: m.Runtime.Protocol.Max,
 			UIMode: m.UI.Mode, Capabilities: append([]string(nil), m.UI.Capabilities...),
+			WantsMouse: m.UI.WantsMouse,
 			Permissions: domain.ToolPermissions{
 				ReadPaths:  append([]string(nil), m.Permissions.Filesystem.Read...),
 				WritePaths: append([]string(nil), m.Permissions.Filesystem.Write...),

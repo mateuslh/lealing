@@ -225,7 +225,6 @@ func Wire(opts Options) (*App, error) {
 	app.ui = tui.NewApp(th, root)
 	app.program = tea.NewProgram(app.ui,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	complete = true
 	return app, nil

@@ -91,6 +91,18 @@ type Router struct {
 // pilha sem bloquear o Update do App.
 type screenCloser interface{ Close() tea.Cmd }
 
+// screenMouseUser é implementado por telas que consomem eventos de mouse
+// (hoje, a tela de tool interativa, que repassa cliques ao processo externo).
+// O programa roda sem captura de mouse por padrão para que o terminal deixe
+// o usuário selecionar texto nas demais telas; o Router liga a captura só
+// enquanto uma dessas telas está no topo da pilha.
+type screenMouseUser interface{ WantsMouse() bool }
+
+func wantsMouse(s Screen) bool {
+	user, ok := s.(screenMouseUser)
+	return ok && user.WantsMouse()
+}
+
 // NewRouter cria o router com a tela raiz.
 func NewRouter(root Screen) *Router {
 	return &Router{stack: []Screen{root}}
@@ -107,7 +119,11 @@ func (r *Router) Current() Screen {
 // Push empilha uma tela e devolve o comando de inicialização dela.
 func (r *Router) Push(s Screen) tea.Cmd {
 	r.stack = append(r.stack, s)
-	return s.Init()
+	init := s.Init()
+	if wantsMouse(s) {
+		return tea.Batch(init, tea.EnableMouseCellMotion)
+	}
+	return init
 }
 
 // Pop desempilha, nunca esvaziando a pilha: a raiz é permanente.
@@ -117,10 +133,14 @@ func (r *Router) Pop() (bool, tea.Cmd) {
 	}
 	current := r.stack[len(r.stack)-1]
 	r.stack = r.stack[:len(r.stack)-1]
+	var closeCmd tea.Cmd
 	if closer, ok := current.(screenCloser); ok {
-		return true, closer.Close()
+		closeCmd = closer.Close()
 	}
-	return true, nil
+	if wantsMouse(current) && !wantsMouse(r.Current()) {
+		return true, tea.Batch(closeCmd, tea.DisableMouse)
+	}
+	return true, closeCmd
 }
 
 // CloseAll encerra recursos de todas as telas empilhadas antes de sair.
