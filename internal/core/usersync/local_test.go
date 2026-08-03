@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
@@ -44,6 +45,17 @@ func (*localInstalled) Remove(context.Context, string) (toolinstall.Removal, err
 	return toolinstall.Removal{}, nil
 }
 
+type localSourceStore struct{ state marketplace.SourceState }
+
+func (s *localSourceStore) Load(context.Context) (marketplace.SourceState, error) {
+	return s.state, nil
+}
+
+func (s *localSourceStore) Save(_ context.Context, state marketplace.SourceState) error {
+	s.state = state
+	return nil
+}
+
 type localCatalog struct{ tools map[domain.ToolID]domain.Tool }
 
 func (c localCatalog) All(context.Context) ([]domain.Tool, error) {
@@ -73,7 +85,7 @@ func TestLocalStateResolveHostLegadoEPreservaProvenienciaInstalada(t *testing.T)
 		"example-tool": {Host: "lealing", ID: "example-tool"},
 	}}
 
-	state, err := usersync.NewLocalState(usage, nil, installed, catalog).Collect(context.Background())
+	state, err := usersync.NewLocalState(usage, nil, installed, catalog, nil).Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +102,7 @@ func TestLocalStateNaoAplicaPreferenciaEmToolHomonima(t *testing.T) {
 	catalog := localCatalog{tools: map[domain.ToolID]domain.Tool{
 		"example-tool": {Host: "outro-host", ID: "example-tool"},
 	}}
-	local := usersync.NewLocalState(usage, nil, nil, catalog)
+	local := usersync.NewLocalState(usage, nil, nil, catalog, nil)
 	state := usersync.State{Usage: []usersync.ToolUsage{{
 		Host: "lealing", ID: "example-tool", Runs: 9, Favorite: true,
 	}}}
@@ -107,7 +119,7 @@ func TestLocalStateNaoAplicaPreferenciaEmToolHomonima(t *testing.T) {
 
 func TestLocalStateGuardaPreferenciaDeToolAindaNaoInstalada(t *testing.T) {
 	usage := &localUsageStore{}
-	local := usersync.NewLocalState(usage, nil, nil, localCatalog{})
+	local := usersync.NewLocalState(usage, nil, nil, localCatalog{}, nil)
 	state := usersync.State{Usage: []usersync.ToolUsage{{
 		Host: "lealing", ID: "example-tool", Runs: 4, Favorite: true,
 	}}}
@@ -119,5 +131,64 @@ func TestLocalStateGuardaPreferenciaDeToolAindaNaoInstalada(t *testing.T) {
 	got := usage.data["example-tool"]
 	if got.Host != "lealing" || !got.Favorite || got.Runs != 4 {
 		t.Fatalf("uso guardado = %+v", got)
+	}
+}
+
+func TestLocalStatePublicaOrigensEmbutidasEReferenciaCadaToolAoHostCorreto(t *testing.T) {
+	sources := &localSourceStore{state: marketplace.SourceState{Custom: []marketplace.Origin{{
+		Name: "partner", Kind: marketplace.OriginRemote,
+		Ref: "https://example.test/partner/index.json", Enabled: true,
+	}}}}
+	installed := &localInstalled{tools: []toolinstall.Installed{
+		{Host: "partner", ID: "example-tool", ActiveVersion: "1.0.0"},
+		{Host: "lealing", ID: "another-tool", ActiveVersion: "1.1.0"},
+	}}
+	builtins := []marketplace.Origin{{
+		Name: "lealing", Label: "índice padrão", Kind: marketplace.OriginRemote,
+		Ref: "https://example.test/lealing/index.json", Trusted: true, Builtin: true, Enabled: true,
+	}}
+
+	state, err := usersync.NewLocalState(nil, sources, installed, nil, builtins).
+		Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Sources) != 2 || state.Sources[0].Name != "lealing" && state.Sources[1].Name != "lealing" {
+		t.Fatalf("origem lealing não foi publicada: %+v", state.Sources)
+	}
+	hosts := map[string]string{}
+	for _, tool := range state.Tools {
+		hosts[tool.ID] = tool.Host
+	}
+	if hosts["example-tool"] != "partner" || hosts["another-tool"] != "lealing" {
+		t.Fatalf("hosts das tools = %+v", hosts)
+	}
+}
+
+func TestLocalStateNaoPersisteOrigemEmbutidaRecebidaComoCustom(t *testing.T) {
+	sources := &localSourceStore{}
+	builtins := []marketplace.Origin{{
+		Name: "lealing", Kind: marketplace.OriginRemote,
+		Ref: "https://example.test/canonical/index.json", Trusted: true, Builtin: true, Enabled: true,
+	}}
+	local := usersync.NewLocalState(nil, sources, nil, nil, builtins)
+	state := usersync.State{Sources: []usersync.MarketplaceSource{
+		{Name: "lealing", Kind: "remote", Ref: "https://example.test/forged/index.json", Enabled: false},
+		{Name: "partner", Kind: "remote", Ref: "https://example.test/partner/index.json", Enabled: true},
+	}}
+
+	applied, err := local.Apply(context.Background(), state,
+		usersync.Selection{usersync.SectionSources: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied[usersync.SectionSources] != 2 {
+		t.Fatalf("origens aplicadas = %v", applied)
+	}
+	if len(sources.state.Custom) != 1 || sources.state.Custom[0].Name != "partner" {
+		t.Fatalf("origens personalizadas = %+v", sources.state.Custom)
+	}
+	if len(sources.state.DisabledBuiltins) != 1 || sources.state.DisabledBuiltins[0] != "lealing" {
+		t.Fatalf("origens embutidas desativadas = %+v", sources.state.DisabledBuiltins)
 	}
 }

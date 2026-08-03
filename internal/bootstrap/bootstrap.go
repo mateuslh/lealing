@@ -146,7 +146,7 @@ func Wire(opts Options) (*App, error) {
 	)
 	syncManager := newSyncManager(
 		opts.Version, directories, config, usageStore,
-		marketplaceSourceStore(directories), toolManager, repo,
+		marketplaceSourceStore(directories), toolManager, repo, indexURL,
 	)
 
 	var toolRunners []outbound.ToolRunner

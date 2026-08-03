@@ -16,10 +16,11 @@ import (
 // sincronizável, o que é aplicado ao baixar e — principalmente — o que nunca
 // é aplicado sozinho.
 type LocalState struct {
-	usage     outbound.UsageStore
-	sources   marketplace.SourceStore
-	installed toolinstall.Manager
-	catalog   outbound.ToolRepository
+	usage          outbound.UsageStore
+	sources        marketplace.SourceStore
+	installed      toolinstall.Manager
+	catalog        outbound.ToolRepository
+	builtinSources []marketplace.Origin
 }
 
 var _ Local = (*LocalState)(nil)
@@ -29,8 +30,12 @@ func NewLocalState(
 	sources marketplace.SourceStore,
 	installed toolinstall.Manager,
 	catalog outbound.ToolRepository,
+	builtinSources []marketplace.Origin,
 ) *LocalState {
-	return &LocalState{usage: usage, sources: sources, installed: installed, catalog: catalog}
+	return &LocalState{
+		usage: usage, sources: sources, installed: installed, catalog: catalog,
+		builtinSources: append([]marketplace.Origin(nil), builtinSources...),
+	}
 }
 
 func (l *LocalState) Collect(ctx context.Context) (State, error) {
@@ -71,7 +76,24 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 		if err != nil {
 			return State{}, err
 		}
+		disabled := make(map[string]bool, len(stored.DisabledBuiltins))
+		for _, name := range stored.DisabledBuiltins {
+			disabled[name] = true
+		}
+		builtins := make(map[string]bool, len(l.builtinSources))
+		for _, origin := range l.builtinSources {
+			builtins[origin.Name] = true
+			state.Sources = append(state.Sources, MarketplaceSource{
+				Name: origin.Name, Label: origin.Label,
+				Kind: string(origin.Kind), Ref: origin.Ref, Enabled: !disabled[origin.Name],
+			})
+		}
 		for _, origin := range stored.Custom {
+			// Um cliente antigo pode ter gravado uma origem embutida como
+			// personalizada. A definição do composition root sempre vence.
+			if builtins[origin.Name] {
+				continue
+			}
 			state.Sources = append(state.Sources, MarketplaceSource{
 				Name: origin.Name, Label: origin.Label,
 				Kind: string(origin.Kind), Ref: origin.Ref, Enabled: origin.Enabled,
@@ -138,8 +160,27 @@ func (l *LocalState) Apply(ctx context.Context, state State, selection Selection
 		if err != nil {
 			return applied, err
 		}
+		builtins := make(map[string]bool, len(l.builtinSources))
+		for _, origin := range l.builtinSources {
+			builtins[origin.Name] = true
+		}
+		disabled := make(map[string]bool, len(state.DisabledBuiltins))
+		for _, name := range state.DisabledBuiltins {
+			disabled[name] = true
+		}
 		custom := make([]marketplace.Origin, 0, len(state.Sources))
 		for _, source := range state.Sources {
+			if builtins[source.Name] {
+				// O remoto pode sincronizar somente o estado ligado/desligado.
+				// Endereço e confiança da origem embutida pertencem à engine.
+				if source.Enabled {
+					delete(disabled, source.Name)
+				} else {
+					disabled[source.Name] = true
+				}
+				applied[SectionSources]++
+				continue
+			}
 			origin := marketplace.Origin{
 				Name: source.Name, Label: source.Label,
 				Kind: marketplace.OriginKind(source.Kind), Ref: source.Ref, Enabled: source.Enabled,
@@ -153,9 +194,12 @@ func (l *LocalState) Apply(ctx context.Context, state State, selection Selection
 			custom = append(custom, origin)
 			applied[SectionSources]++
 		}
-		disabled := append([]string(nil), state.DisabledBuiltins...)
-		sort.Strings(disabled)
-		current.Custom, current.DisabledBuiltins = custom, disabled
+		disabledNames := make([]string, 0, len(disabled))
+		for name := range disabled {
+			disabledNames = append(disabledNames, name)
+		}
+		sort.Strings(disabledNames)
+		current.Custom, current.DisabledBuiltins = custom, disabledNames
 		if err := l.sources.Save(ctx, current); err != nil {
 			return applied, err
 		}

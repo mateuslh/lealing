@@ -73,7 +73,9 @@ type InstalledTool struct {
 	Version string `json:"version"`
 }
 
-// MarketplaceSource é um repositório de tools cadastrado.
+// MarketplaceSource é um repositório de tools conhecido pela engine. Inclui
+// tanto origens embutidas quanto cadastradas pelo usuário, para que Host seja
+// resolvível sem conhecimento externo ao documento.
 type MarketplaceSource struct {
 	Name    string `json:"name"`
 	Label   string `json:"label,omitempty"`
@@ -93,7 +95,9 @@ type State struct {
 	Device    string    `json:"device,omitempty"`
 	Engine    string    `json:"engine,omitempty"`
 
-	Usage   []ToolUsage         `json:"usage,omitempty"`
+	Usage []ToolUsage `json:"usage,omitempty"`
+	// Sources carrega a visão efetiva, inclusive origens embutidas. Ao aplicar,
+	// a engine usa somente Enabled das embutidas e preserva sua definição local.
 	Sources []MarketplaceSource `json:"sources,omitempty"`
 	// DisabledBuiltins acompanha as origens: desligar o índice padrão é uma
 	// preferência tanto quanto adicionar um repositório.

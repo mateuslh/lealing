@@ -150,7 +150,10 @@ tool a tool, no marketplace.
 O `state.json` usa exclusivamente o formato v3. Toda preferência de tool é
 qualificada por `host` e `id` (`lealing/token-usage`, por exemplo), então uma
 origem paralela que publique o mesmo ID não herda favoritos, histórico nem a
-lista de instalações. A leitura também recusa campos desconhecidos,
+lista de instalações. A seção `sources` inclui também as origens embutidas,
+para que os `host`s delas tenham procedência explícita; ao baixar, endereço e
+confiança dessas origens continuam vindo da engine e só o estado habilitado é
+aplicado. A leitura também recusa campos desconhecidos,
 duplicados, coleções acima dos limites e referências ou versões inválidas.
 
 O que nunca sai da máquina: credenciais. As contas do Claude Code, os tokens
