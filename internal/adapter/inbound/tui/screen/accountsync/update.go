@@ -128,6 +128,14 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		m.cursor = clamp(m.cursor-1, m.rowCount())
 	case "down", "j":
 		m.cursor = clamp(m.cursor+1, m.rowCount())
+	case "right", "l":
+		if m.cursor < len(usersync.AllSections) {
+			m.cursor = clamp(m.cursor+len(usersync.AllSections), m.rowCount())
+		}
+	case "left", "h":
+		if m.cursor >= len(usersync.AllSections) {
+			m.cursor = clamp(m.cursor-len(usersync.AllSections), m.rowCount())
+		}
 	case "enter", " ", "space":
 		return m.activate()
 	case "ctrl+r", "r":

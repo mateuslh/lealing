@@ -147,6 +147,11 @@ Três seções, ligadas e desligadas separadamente: **favoritos e uso**,
 viaja, porque instalar código de terceiros continua sendo uma decisão sua,
 tool a tool, no marketplace.
 
+Na TUI (`c` → **Conta** → `gerenciar →`), a tela larga mostra o escopo e as
+operações (enviar, baixar, desconectar) em painéis lado a lado; `↑↓` percorre
+cada painel e `←→`/`h l` pulam direto de um para o outro, sem precisar descer
+até o fim de uma lista para alcançar a outra.
+
 O `state.json` usa exclusivamente o formato v3. Toda preferência de tool é
 qualificada por `host` e `id` (`lealing/token-usage`, por exemplo), então uma
 origem paralela que publique o mesmo ID não herda favoritos, histórico nem a

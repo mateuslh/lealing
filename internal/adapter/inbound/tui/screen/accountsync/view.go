@@ -57,7 +57,7 @@ func (m *Model) viewCompactContent(th *theme.Theme, width, height int) string {
 	case m.device != nil:
 		return m.viewDeviceFlow(th, width, height)
 	case !m.loaded && m.busy != "":
-		return component.Center(width, height, th.Dim.Render(m.busy))
+		return component.Center(width, height, th.Dim.Render("◌ "+m.busy))
 	case !m.loaded && m.err != nil:
 		return component.Center(width, height,
 			lipgloss.NewStyle().Foreground(th.Danger).Render("✗ "+firstLine(m.err.Error())))
@@ -508,7 +508,7 @@ func (m *Model) Hints() []tui.Hint {
 	case m.busy != "":
 		return []tui.Hint{{Key: "esc", Label: "voltar"}}
 	default:
-		return []tui.Hint{{Key: "↑↓", Label: "ação"}, {Key: "↵", Label: "selecionar"},
+		return []tui.Hint{{Key: "↑↓←→", Label: "ação"}, {Key: "↵", Label: "selecionar"},
 			{Key: "r", Label: "atualizar"}, {Key: "esc", Label: "voltar"}}
 	}
 }
