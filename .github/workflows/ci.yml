@@ -55,6 +55,8 @@ jobs:
           LEALING_BIN_DIR: ${{ runner.temp }}/lealing-install-test
           LEALING_NO_PATH: "1"
         run: |
+          New-Item -ItemType Directory -Path $env:LEALING_BIN_DIR -Force | Out-Null
+          Set-Content -LiteralPath "$env:LEALING_BIN_DIR/lealing.exe" -Value "versão antiga"
           & ./scripts/install.ps1
           & "$env:LEALING_BIN_DIR/lealing.exe" -version
 

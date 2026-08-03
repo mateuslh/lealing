@@ -167,8 +167,15 @@ try {
 
     if (Test-Path -LiteralPath $target -PathType Leaf) {
         # File.Replace troca arquivos no mesmo volume de forma atômica e
-        # mantém o executável anterior intacto se a operação falhar.
-        [IO.File]::Replace($staged, $target, $null)
+        # mantém o executável anterior intacto se a operação falhar. Um
+        # caminho real de backup evita que o Windows PowerShell 5.1 converta
+        # $null em string vazia e recuse a chamada como caminho inválido.
+        $backup = Join-Path $binDir "$Binary.old"
+        if (Test-Path -LiteralPath $backup) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+        [IO.File]::Replace($staged, $target, $backup)
+        Remove-Item -LiteralPath $backup -Force
     }
     else {
         Move-Item -LiteralPath $staged -Destination $target
