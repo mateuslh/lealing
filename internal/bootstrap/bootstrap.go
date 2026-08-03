@@ -243,7 +243,7 @@ func Wire(opts Options) (*App, error) {
 					Label:       "Sincronização do GitHub",
 					Description: "Conecte sua conta, escolha o que pode sair da máquina e controle envios, downloads e conflitos.",
 					Value:       "gerenciar",
-					Screen:      func() tui.Screen { return accountsyncscreen.New(deps, syncManager) },
+					Screen:      func() tui.Screen { return accountsyncscreen.New(deps, syncManager, hostActions) },
 				},
 				settingsscreen.Action{
 					Section:     settings.SectionUpdates.ID,
@@ -277,11 +277,12 @@ func (a *App) RenderStatic(width, height int, keys string) (string, error) {
 	return tui.RenderStatic(a.ui, width, height, parsed, 8), nil
 }
 
-// Run entrega o controle ao loop da TUI e libera os recursos ao final.
-func (a *App) Run() error {
+// Run entrega o controle ao loop da TUI, libera os recursos ao final e
+// devolve a mensagem que precisa ser impressa depois da tela alternativa.
+func (a *App) Run() (string, error) {
 	defer a.close()
 	_, err := a.program.Run()
-	return err
+	return a.ui.ExitMessage(), err
 }
 
 // close roda os finalizadores na ordem inversa do registro.

@@ -334,9 +334,11 @@ bater**; o `--ff-only` nunca faz merge automático em um clone com trabalho
 local; e a troca do executável é um rename no mesmo volume, então ou você fica
 com o binário novo, ou com o antigo — nunca com um pela metade.
 
-Na TUI, a mesma checagem acontece sem sair do programa: `c` → **Atualizações**
-→ `gerenciar →` mostra a versão instalada frente à última publicada e aplica
-a troca com uma confirmação explícita.
+Na TUI, a mesma checagem acontece em `c` → **Atualizações** →
+`gerenciar →`: a tela mostra a versão instalada frente à última publicada e
+aplica a troca com uma confirmação explícita. Depois de uma atualização
+bem-sucedida, o lealing fecha e deixa no terminal o aviso de que já pode ser
+aberto novamente com a versão nova.
 
 A home também verifica sozinha ao abrir, sem atrasar a primeira tela: a
 checagem roda em paralelo com o carregamento do catálogo, então você já está

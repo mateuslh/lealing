@@ -78,6 +78,15 @@ func Navigate(s Screen) tea.Cmd {
 // Back é o helper para emitir BackMsg.
 func Back() tea.Msg { return BackMsg{} }
 
+// ExitMsg pede ao App para encerrar a TUI e preservar uma mensagem para ser
+// exibida depois que o terminal sair da tela alternativa.
+type ExitMsg struct{ Message string }
+
+// Exit é o helper para emitir ExitMsg de dentro de uma tela.
+func Exit(message string) tea.Cmd {
+	return func() tea.Msg { return ExitMsg{Message: message} }
+}
+
 // Router mantém a pilha de navegação.
 //
 // Pilha, e não um único ponteiro, porque o fluxo natural do lealing é

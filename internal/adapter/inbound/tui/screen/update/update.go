@@ -2,6 +2,7 @@ package update
 
 import (
 	"errors"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -20,6 +21,12 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 	case appliedMsg:
 		m.phase = phaseDone
 		m.outcome, m.err = msg.outcome, msg.err
+		if msg.err == nil && msg.outcome.Restart {
+			return m, tui.Exit(fmt.Sprintf(
+				"lealing atualizado para %s. Você já pode abrir novamente para usar a versão nova.",
+				orDash(msg.outcome.To),
+			))
+		}
 		return m, nil
 
 	case tea.KeyMsg:

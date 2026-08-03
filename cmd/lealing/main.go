@@ -167,7 +167,11 @@ func run() error {
 		return nil
 	}
 
-	return app.Run()
+	exitMessage, err := app.Run()
+	if exitMessage != "" {
+		fmt.Println(exitMessage)
+	}
+	return err
 }
 
 type toolCommand struct {

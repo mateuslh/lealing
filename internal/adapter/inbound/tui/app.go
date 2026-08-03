@@ -49,6 +49,7 @@ type App struct {
 	width, height int
 	showHelp      bool
 	quitting      bool
+	exitMessage   string
 }
 
 var _ tea.Model = (*App)(nil)
@@ -81,6 +82,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case ExitMsg:
+		a.quitting = true
+		a.exitMessage = msg.Message
+		return a, tea.Sequence(a.router.CloseAll(), tea.Quit)
+
 	case tea.KeyMsg:
 		if cmd, handled := a.handleGlobalKey(msg); handled {
 			return a, cmd
@@ -89,6 +95,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return a, a.router.Update(msg)
 }
+
+// ExitMessage devolve o aviso que deve permanecer no terminal depois que a
+// tela alternativa for restaurada. Saídas normais não produzem mensagem.
+func (a *App) ExitMessage() string { return a.exitMessage }
 
 // handleGlobalKey trata os atalhos que valem em qualquer tela.
 //

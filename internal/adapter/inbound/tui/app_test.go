@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,5 +33,22 @@ func TestCapturingImpedeTextoDeFecharAplicacao(t *testing.T) {
 	}
 	if len(screen.keys) != 1 || screen.keys[0] != "q" {
 		t.Fatalf("tecla não chegou ao campo: %v", screen.keys)
+	}
+}
+
+func TestExitMsgFechaAplicacaoEPreservaMensagem(t *testing.T) {
+	app := NewApp(theme.Default(), &capturingScreen{})
+	message := "lealing atualizado. Você já pode abrir novamente."
+
+	_, command := app.Update(ExitMsg{Message: message})
+
+	if !app.quitting || command == nil {
+		t.Fatal("ExitMsg não iniciou o encerramento da aplicação")
+	}
+	if got := app.ExitMessage(); got != message {
+		t.Fatalf("mensagem final = %q, queria %q", got, message)
+	}
+	if view := app.View(); strings.TrimSpace(view) != "" {
+		t.Fatalf("aplicação continuou renderizando durante a saída: %q", view)
 	}
 }

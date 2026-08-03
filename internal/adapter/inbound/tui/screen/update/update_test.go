@@ -96,12 +96,38 @@ func TestUAtualizaQuandoPodeAplicar(t *testing.T) {
 		t.Fatal("u não disparou a aplicação")
 	}
 
-	model, _ = update(t, model, command())
+	model, command = update(t, model, command())
 	if manager.applyCall != 1 {
 		t.Fatalf("Apply chamado %d vezes", manager.applyCall)
 	}
 	if model.phase != phaseDone || model.outcome.To != "v1.1.0" {
 		t.Fatalf("fase = %v, outcome = %+v", model.phase, model.outcome)
+	}
+	if command == nil {
+		t.Fatal("atualização concluída não pediu para fechar o lealing")
+	}
+	message := command()
+	exit, ok := message.(tui.ExitMsg)
+	if !ok {
+		t.Fatalf("comando final devolveu %T, queria tui.ExitMsg", message)
+	}
+	if want := "lealing atualizado para v1.1.0. Você já pode abrir novamente para usar a versão nova."; exit.Message != want {
+		t.Fatalf("mensagem final = %q, queria %q", exit.Message, want)
+	}
+}
+
+func TestFalhaAoAtualizarMantemOTerminalAberto(t *testing.T) {
+	manager := &fakeManager{status: outdated(), applyErr: errors.New("sem rede")}
+	model := opened(t, manager)
+
+	model, command := update(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	model, command = update(t, model, command())
+
+	if command != nil {
+		t.Fatal("falha na atualização pediu para fechar o lealing")
+	}
+	if model.phase != phaseDone || model.err == nil {
+		t.Fatalf("fase = %v, err = %v", model.phase, model.err)
 	}
 }
 
