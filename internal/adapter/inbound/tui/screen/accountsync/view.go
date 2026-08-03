@@ -253,7 +253,7 @@ func (m *Model) viewDisconnectedWide(th *theme.Theme, width, height int) string 
 		"✓ cria ou reutiliza “lealing-state” como privado",
 		"✓ permite escolher favoritos, origens e referências de tools",
 		"✓ detecta revisão remota antes de sobrescrever",
-		"✓ mantém instalação de binários como decisão separada",
+		"✓ reproduz versões instaladas quando essa seção está ligada",
 		"",
 		component.FieldList{Rows: []component.Row{{
 			Label: "Conectar ao GitHub", Value: "abrir device flow →", Tone: th.Accent,
@@ -443,14 +443,24 @@ func sectionHeader(th *theme.Theme, title string, width int) string {
 
 func (m *Model) viewDeviceFlow(th *theme.Theme, width, height int) string {
 	code := lipgloss.NewStyle().Foreground(th.Primary).Bold(true).Render(m.device.UserCode)
+	feedback := th.Ghost.Render("O código será copiado automaticamente.")
+	if m.deviceActionErr != nil {
+		feedback = lipgloss.NewStyle().Foreground(th.Danger).
+			Render(component.TruncateTail("✗ "+firstLine(m.deviceActionErr.Error()), width))
+	} else if m.deviceFeedback != "" {
+		feedback = lipgloss.NewStyle().Foreground(th.Success).
+			Render(component.TruncateTail("✓ "+m.deviceFeedback, width))
+	}
 	lines := []string{
 		th.Strong.Render("Autorize o lealing no GitHub"),
 		"",
-		th.Dim.Render("1. Abra no navegador:"),
+		th.Dim.Render("1. Pressione o para abrir no navegador:"),
 		lipgloss.NewStyle().Foreground(th.Accent).Render(component.TruncateTail(m.device.VerificationURL, width)),
 		"",
-		th.Dim.Render("2. Informe o código:"),
+		th.Dim.Render("2. Cole o código no GitHub:"),
 		code,
+		"",
+		feedback,
 		"",
 		th.Ghost.Render("Aguardando aprovação… pressione esc para cancelar."),
 	}
@@ -480,7 +490,7 @@ func (m *Model) selectedDescription() string {
 	case 0:
 		return "Publica no repositório privado somente as seções habilitadas."
 	case 1:
-		return "Aplica favoritos, uso e origens; tools ausentes nunca são instaladas em silêncio."
+		return "Reproduz exatamente origens e versões habilitadas; diferenças são instaladas ou removidas."
 	default:
 		return "Remove o token local; repositório e autorização permanecem no GitHub."
 	}
@@ -491,7 +501,7 @@ func (m *Model) footer() string {
 	case m.confirmation != nil:
 		return "↵ confirmar · esc cancelar"
 	case m.device != nil:
-		return "esc cancelar"
+		return "o abrir navegador · c copiar código · esc cancelar"
 	case m.busy != "":
 		return "aguarde"
 	default:
@@ -504,7 +514,8 @@ func (m *Model) Hints() []tui.Hint {
 	case m.confirmation != nil:
 		return []tui.Hint{{Key: "y/↵", Label: "confirmar"}, {Key: "n/esc", Label: "cancelar"}}
 	case m.device != nil:
-		return []tui.Hint{{Key: "esc", Label: "cancelar login"}}
+		return []tui.Hint{{Key: "o", Label: "abrir navegador"},
+			{Key: "c", Label: "copiar código"}, {Key: "esc", Label: "cancelar login"}}
 	case m.busy != "":
 		return []tui.Hint{{Key: "esc", Label: "voltar"}}
 	default:

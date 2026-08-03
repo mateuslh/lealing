@@ -28,6 +28,21 @@ type fakeManager struct {
 	wait       bool
 }
 
+type fakeActions struct {
+	clipboard string
+	browser   string
+}
+
+func (f *fakeActions) WriteClipboard(_ context.Context, text string) error {
+	f.clipboard = text
+	return nil
+}
+
+func (f *fakeActions) OpenBrowser(_ context.Context, target string) error {
+	f.browser = target
+	return nil
+}
+
 func (f *fakeManager) Status(context.Context) (usersync.Status, error) { return f.status, nil }
 func (f *fakeManager) StartLogin(context.Context) (usersync.DeviceCode, error) {
 	return f.code, nil
@@ -86,7 +101,14 @@ func testDeps() tui.Deps { return tui.Deps{Theme: theme.Default()} }
 
 func loadedModel(t *testing.T, manager *fakeManager) *Model {
 	t.Helper()
-	model := New(testDeps(), manager)
+	model := New(testDeps(), manager, nil)
+	next, _ := model.Update(model.Init()())
+	return next.(*Model)
+}
+
+func loadedModelWithActions(t *testing.T, manager *fakeManager, actions *fakeActions) *Model {
+	t.Helper()
+	model := New(testDeps(), manager, actions)
 	next, _ := model.Update(model.Init()())
 	return next.(*Model)
 }
@@ -102,25 +124,48 @@ func updateModel(t *testing.T, model *Model, message tea.Msg) (*Model, tea.Cmd) 
 }
 
 func TestContaDesconectadaConduzDeviceFlowAteOStatusConectado(t *testing.T) {
+	actions := &fakeActions{}
 	manager := &fakeManager{status: usersync.Status{
 		Local: usersync.State{Usage: []usersync.ToolUsage{{Host: "lealing", ID: "example-tool"}}},
 	}, code: usersync.DeviceCode{
 		UserCode: "ABCD-1234", VerificationURL: "https://github.com/login/device",
 		ExpiresAt: time.Now().Add(time.Minute),
 	}}
-	model := loadedModel(t, manager)
+	model := loadedModelWithActions(t, manager, actions)
 	if view := model.View(tui.Frame{Width: 100, Height: 30}); !strings.Contains(view, "Nenhuma conta") {
 		t.Fatalf("estado desconectado ausente:\n%s", view)
 	}
 
 	model, command := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model, command = updateModel(t, model, command())
+	batchMessage := command()
+	batch, ok := batchMessage.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("início da espera = %T com %d comandos", batchMessage, len(batch))
+	}
+	if actions.clipboard != "" {
+		t.Fatal("clipboard foi alterado fora de tea.Cmd")
+	}
+	model, _ = updateModel(t, model, batch[0]())
 	view := model.View(tui.Frame{Width: 100, Height: 30})
-	if !strings.Contains(view, "ABCD-1234") || !strings.Contains(view, "github.com/login/device") {
+	if !strings.Contains(view, "ABCD-1234") || !strings.Contains(view, "github.com/login/device") ||
+		!strings.Contains(view, "Pressione o") || !strings.Contains(view, "código copiado") {
 		t.Fatalf("device flow incompleto:\n%s", view)
 	}
+	if actions.clipboard != "ABCD-1234" {
+		t.Fatalf("clipboard = %q", actions.clipboard)
+	}
 
-	model, command = updateModel(t, model, command())
+	model, openCommand := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if actions.browser != "" {
+		t.Fatal("navegador foi aberto fora de tea.Cmd")
+	}
+	model, _ = updateModel(t, model, openCommand())
+	if actions.browser != "https://github.com/login/device" {
+		t.Fatalf("navegador = %q", actions.browser)
+	}
+
+	model, command = updateModel(t, model, batch[1]())
 	if command == nil {
 		t.Fatal("login concluído não recarregou o status")
 	}
@@ -200,9 +245,14 @@ func TestCloseCancelaPollingDoLogin(t *testing.T) {
 	model := loadedModel(t, manager)
 	model, command := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model, command = updateModel(t, model, command())
+	batch, ok := command().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("início da espera = %T", command())
+	}
+	waitCommand := batch[1]
 
 	done := make(chan tea.Msg, 1)
-	go func() { done <- command() }()
+	go func() { done <- waitCommand() }()
 	if closeCommand := model.Close(); closeCommand != nil {
 		closeCommand()
 	}

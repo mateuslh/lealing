@@ -9,16 +9,18 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	"github.com/mateuslh/lealing/internal/core/hostaction"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
 const ScreenID tui.ScreenID = "engine/settings/sync"
 
 const (
-	statusTimeout    = 20 * time.Second
-	requestTimeout   = 30 * time.Second
-	operationTimeout = time.Minute
-	maxLoginWait     = 20 * time.Minute
+	statusTimeout     = 20 * time.Second
+	requestTimeout    = 30 * time.Second
+	operationTimeout  = 10 * time.Minute
+	maxLoginWait      = 20 * time.Minute
+	hostActionTimeout = 5 * time.Second
 )
 
 type operation uint8
@@ -39,6 +41,7 @@ type confirmation struct {
 type Model struct {
 	deps    tui.Deps
 	manager usersync.Manager
+	actions hostaction.Actions
 
 	status usersync.Status
 	loaded bool
@@ -48,16 +51,19 @@ type Model struct {
 	err     error
 	message string
 
-	device       *usersync.DeviceCode
-	loginAttempt uint64
-	cancelIO     context.CancelFunc
-	confirmation *confirmation
+	device          *usersync.DeviceCode
+	deviceFeedback  string
+	deviceActionErr error
+	clipboardCopied bool
+	loginAttempt    uint64
+	cancelIO        context.CancelFunc
+	confirmation    *confirmation
 }
 
 var _ tui.Screen = (*Model)(nil)
 
-func New(deps tui.Deps, manager usersync.Manager) *Model {
-	return &Model{deps: deps, manager: manager}
+func New(deps tui.Deps, manager usersync.Manager, actions hostaction.Actions) *Model {
+	return &Model{deps: deps, manager: manager, actions: actions}
 }
 
 func (*Model) ID() tui.ScreenID { return ScreenID }
@@ -108,6 +114,19 @@ type loginFinishedMsg struct {
 	attempt  uint64
 	identity usersync.Identity
 	err      error
+}
+
+type deviceAction uint8
+
+const (
+	deviceActionCopy deviceAction = iota + 1
+	deviceActionOpen
+)
+
+type deviceActionMsg struct {
+	attempt uint64
+	action  deviceAction
+	err     error
 }
 
 type sectionMsg struct {
@@ -165,6 +184,32 @@ func (m *Model) awaitLogin(code usersync.DeviceCode, attempt uint64) tea.Cmd {
 		defer cancel()
 		identity, err := manager.CompleteLogin(ctx, code)
 		return loginFinishedMsg{attempt: attempt, identity: identity, err: err}
+	}
+}
+
+func (m *Model) copyDeviceCode(code string, attempt uint64) tea.Cmd {
+	actions := m.actions
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), hostActionTimeout)
+		defer cancel()
+		if actions == nil {
+			return deviceActionMsg{attempt: attempt, action: deviceActionCopy, err: errHostActionsUnavailable}
+		}
+		err := actions.WriteClipboard(ctx, code)
+		return deviceActionMsg{attempt: attempt, action: deviceActionCopy, err: err}
+	}
+}
+
+func (m *Model) openLoginURL(target string, attempt uint64) tea.Cmd {
+	actions := m.actions
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), hostActionTimeout)
+		defer cancel()
+		if actions == nil {
+			return deviceActionMsg{attempt: attempt, action: deviceActionOpen, err: errHostActionsUnavailable}
+		}
+		err := actions.OpenBrowser(ctx, target)
+		return deviceActionMsg{attempt: attempt, action: deviceActionOpen, err: err}
 	}
 }
 

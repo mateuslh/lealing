@@ -11,6 +11,7 @@ import (
 )
 
 var errNotConfigured = errors.New("sincronização indisponível nesta sessão")
+var errHostActionsUnavailable = errors.New("integrações do navegador e clipboard indisponíveis")
 
 func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 	switch message := message.(type) {
@@ -34,14 +35,42 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 			return m, nil
 		}
 		m.device = &message.code
+		m.clipboardCopied = false
+		m.deviceFeedback, m.deviceActionErr = "copiando o código…", nil
 		m.busy = "aguardando sua aprovação no GitHub…"
-		return m, m.awaitLogin(message.code, message.attempt)
+		return m, tea.Batch(
+			m.copyDeviceCode(message.code.UserCode, message.attempt),
+			m.awaitLogin(message.code, message.attempt),
+		)
+
+	case deviceActionMsg:
+		if message.attempt != m.loginAttempt || m.device == nil {
+			return m, nil
+		}
+		if message.err != nil {
+			m.deviceFeedback, m.deviceActionErr = "", message.err
+			return m, nil
+		}
+		m.deviceActionErr = nil
+		if message.action == deviceActionOpen {
+			if m.clipboardCopied {
+				m.deviceFeedback = "navegador aberto; o código já está no clipboard"
+			} else {
+				m.deviceFeedback = "navegador aberto; copie o código exibido"
+			}
+		} else {
+			m.clipboardCopied = true
+			m.deviceFeedback = "código copiado para o clipboard"
+		}
+		return m, nil
 
 	case loginFinishedMsg:
 		if message.attempt != m.loginAttempt {
 			return m, nil
 		}
 		m.cancelIO, m.device, m.busy = nil, nil, ""
+		m.deviceFeedback, m.deviceActionErr = "", nil
+		m.clipboardCopied = false
 		if message.err != nil {
 			m.err = message.err
 			return m, nil
@@ -85,8 +114,9 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 			m.message = fmt.Sprintf("enviado: %d usos, %d origens e %d tools",
 				summary[usersync.SectionUsage], summary[usersync.SectionSources], summary[usersync.SectionTools])
 		} else {
-			m.message = fmt.Sprintf("aplicado: %d usos e %d origens",
-				message.result.Applied[usersync.SectionUsage], message.result.Applied[usersync.SectionSources])
+			m.message = fmt.Sprintf("aplicado: %d usos, %d origens e %d tools",
+				message.result.Applied[usersync.SectionUsage], message.result.Applied[usersync.SectionSources],
+				message.result.Applied[usersync.SectionTools])
 		}
 		m.busy = "conferindo o resultado…"
 		return m, m.loadStatus()
@@ -114,8 +144,15 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		return m.handleConfirmation(key)
 	}
 	if m.device != nil {
-		if key.String() == "esc" || key.String() == "c" {
+		switch key.String() {
+		case "esc":
 			m.cancelLoginFlow()
+		case "c":
+			m.deviceFeedback, m.deviceActionErr = "copiando o código…", nil
+			return m, m.copyDeviceCode(m.device.UserCode, m.loginAttempt)
+		case "o":
+			m.deviceFeedback, m.deviceActionErr = "abrindo o navegador…", nil
+			return m, m.openLoginURL(m.device.VerificationURL, m.loginAttempt)
 		}
 		return m, nil
 	}
@@ -213,6 +250,8 @@ func (m *Model) cancelLoginFlow() {
 	m.cancelIO = nil
 	m.loginAttempt++
 	m.device, m.busy = nil, ""
+	m.deviceFeedback, m.deviceActionErr = "", nil
+	m.clipboardCopied = false
 	m.message = "login cancelado"
 }
 
@@ -225,7 +264,7 @@ func normalConfirmation(selected operation, status usersync.Status) *confirmatio
 		}
 		return &confirmation{operation: selected, title: "Enviar para o GitHub?", message: message}
 	case operationPull:
-		message := "Favoritos, uso e origens habilitados serão substituídos nesta máquina. A lista de tools será consultada, mas binários não serão instalados automaticamente."
+		message := "As seções habilitadas serão reproduzidas nesta máquina. Tools serão instaladas, atualizadas ou removidas até corresponder exatamente ao estado remoto."
 		return &confirmation{operation: selected, title: "Aplicar o estado remoto?", message: message}
 	default:
 		return &confirmation{operation: selected, title: "Desconectar esta conta?", message: "A credencial será removida desta máquina. O repositório e a autorização do OAuth App permanecerão no GitHub."}

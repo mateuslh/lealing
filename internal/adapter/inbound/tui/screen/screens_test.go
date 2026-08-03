@@ -78,11 +78,14 @@ func marketplace() tui.Screen {
 	return drain(model, model.Init())
 }
 
-type fakeSync struct{ status usersync.Status }
+type fakeSync struct {
+	status usersync.Status
+	code   usersync.DeviceCode
+}
 
 func (f fakeSync) Status(context.Context) (usersync.Status, error) { return f.status, nil }
-func (fakeSync) StartLogin(context.Context) (usersync.DeviceCode, error) {
-	return usersync.DeviceCode{}, nil
+func (f fakeSync) StartLogin(context.Context) (usersync.DeviceCode, error) {
+	return f.code, nil
 }
 func (fakeSync) CompleteLogin(context.Context, usersync.DeviceCode) (usersync.Identity, error) {
 	return usersync.Identity{}, nil
@@ -111,9 +114,24 @@ func syncStatus() usersync.Status {
 
 func accountSync() tui.Screen {
 	model := tui.Screen(accountsyncscreen.New(
-		tui.Deps{Theme: theme.Default()}, fakeSync{status: syncStatus()},
+		tui.Deps{Theme: theme.Default()}, fakeSync{status: syncStatus()}, nil,
 	))
 	return drain(model, model.Init())
+}
+
+func accountSyncDevice() tui.Screen {
+	model := tui.Screen(accountsyncscreen.New(
+		tui.Deps{Theme: theme.Default()}, fakeSync{code: usersync.DeviceCode{
+			UserCode: "ABCD-1234", VerificationURL: "https://github.com/login/device",
+		}}, nil,
+	))
+	model = drain(model, model.Init())
+	model, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		return model
+	}
+	model, _ = model.Update(command())
+	return model
 }
 
 type fakeSettings struct{ values []coresettings.Value }
@@ -189,10 +207,11 @@ func drain(model tui.Screen, command tea.Cmd) tui.Screen {
 
 func TestTelasAdministrativasNuncaEstouramOFrame(t *testing.T) {
 	for name, factory := range map[string]func() tui.Screen{
-		"marketplace":   marketplace,
-		"configuração":  settings,
-		"sincronização": accountSync,
-		"atualização":   updateScreen,
+		"marketplace":                 marketplace,
+		"configuração":                settings,
+		"sincronização":               accountSync,
+		"sincronização durante login": accountSyncDevice,
+		"atualização":                 updateScreen,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, key := range []tea.Msg{
