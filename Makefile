@@ -16,7 +16,7 @@ GO_BIN      := $(shell command -v go)
 SIZE ?= 150x44
 KEYS ?=
 
-.PHONY: all build build-windows cross snapshot release run test bench cover lint fmt vet render tidy clean install
+.PHONY: all build build-windows cross snapshot release run test bench cover lint fmt vet render tidy clean install last-version release-patch release-minor release-major
 
 all: build
 
@@ -46,11 +46,32 @@ snapshot: ## monta os artefatos de release em dist/ sem publicar
 
 release: ## solicita à pipeline a publicação de VERSION=vX.Y.Z
 	@if [ "$(origin VERSION)" != "command line" ]; then \
-		echo 'uso: make release VERSION=vX.Y.Z'; \
+		echo 'uso: make release VERSION=vX.Y.Z (ou make release-patch/release-minor/release-major)'; \
 		exit 2; \
 	fi
 	@gh workflow run release.yml --field version='$(VERSION)'
 	@echo 'pipeline de $(VERSION) acionada: gh run list --workflow release.yml'
+
+last-version: ## mostra a última tag publicada no repositório remoto
+	@git fetch --tags -q origin 2>/dev/null || true
+	@git tag --sort=-v:refname | head -1
+
+release-patch release-minor release-major: ## calcula a próxima versão a partir da última tag e publica
+	@git fetch --tags -q origin 2>/dev/null || true
+	@last=$$(git tag --sort=-v:refname | head -1); \
+	last=$${last:-v0.0.0}; \
+	ver=$${last#v}; \
+	major=$$(echo $$ver | cut -d. -f1); \
+	minor=$$(echo $$ver | cut -d. -f2); \
+	patch=$$(echo $$ver | cut -d. -f3); \
+	case $@ in \
+		release-patch) patch=$$((patch+1));; \
+		release-minor) minor=$$((minor+1)); patch=0;; \
+		release-major) major=$$((major+1)); minor=0; patch=0;; \
+	esac; \
+	next="v$$major.$$minor.$$patch"; \
+	echo "última versão: $$last  →  nova versão: $$next"; \
+	$(MAKE) release VERSION=$$next
 
 run: ## abre a TUI
 	go run $(PKG)

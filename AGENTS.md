@@ -370,12 +370,25 @@ Não crie tag local nem commit artificial de release. Somente quando o usuário
 pedir explicitamente para publicar:
 
 ```sh
+make last-version           # mostra a última tag publicada (busca em origin)
+make release-patch          # incrementa X.Y.(Z+1) e publica
+make release-minor          # incrementa X.(Y+1).0 e publica
+make release-major          # incrementa (X+1).0.0 e publica
+```
+
+Esses alvos buscam as tags do remoto, calculam a próxima versão semver a
+partir da última publicada e chamam `make release VERSION=vX.Y.Z`
+automaticamente — não é preciso descobrir ou digitar o número manualmente.
+Use o alvo direto apenas se precisar de um número específico (ex.: um
+pre-release ou pular uma versão):
+
+```sh
 make release VERSION=vX.Y.Z
 ```
 
-O alvo solicita `.github/workflows/release.yml`. Acompanhe o workflow até o
-fim e confira os artefatos e `checksums.txt` antes de afirmar que a versão foi
-publicada.
+O alvo `release` solicita `.github/workflows/release.yml`. Acompanhe o
+workflow até o fim e confira os artefatos e `checksums.txt` antes de afirmar
+que a versão foi publicada.
 
 Nunca mova, apague ou recrie tag enviada. Se uma publicação falhar, corrija a
 causa e publique uma versão nova. Nunca use `--no-verify`.
