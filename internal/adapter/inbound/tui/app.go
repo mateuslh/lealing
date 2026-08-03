@@ -156,13 +156,17 @@ func (a *App) frameSize(msg tea.WindowSizeMsg) tea.WindowSizeMsg {
 	return msg
 }
 
-// resizeCurrent reenvia o tamanho à tela recém-empilhada.
+// resizeCurrent entrega o tamanho útil à tela recém-empilhada.
+//
+// A mensagem é processada diretamente pelo Router: devolvê-la como tea.Msg
+// faria o App confundir um frame já sem o chrome com um novo tamanho do
+// terminal e descontar as barras outra vez a cada navegação.
 func (a *App) resizeCurrent() tea.Cmd {
 	if a.width == 0 {
 		return nil
 	}
 	size := a.frameSize(tea.WindowSizeMsg{Width: a.width, Height: a.height})
-	return func() tea.Msg { return size }
+	return a.router.Update(size)
 }
 
 // View implementa tea.Model.
