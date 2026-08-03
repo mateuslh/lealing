@@ -93,7 +93,7 @@ func fixture() *fakeRepo {
 		},
 		tools: []domain.Tool{
 			{ID: "git/status", Name: "status", Category: "git", Kind: domain.KindProcess},
-			{ID: "git/stash", Name: "stash", Category: "git", Kind: domain.KindBuiltin},
+			{ID: "example/stash", Name: "stash", Category: "git", Kind: domain.KindProcess},
 			{ID: "git/push", Name: "push", Category: "git", Kind: domain.KindProcess, Risk: domain.RiskCaution},
 			{ID: "k8s/pods", Name: "pods", Category: "k8s", Kind: domain.KindRemote},
 			{ID: "k8s/drain", Name: "drain", Category: "k8s", Kind: domain.KindRemote, Risk: domain.RiskDestructive},
@@ -137,7 +137,7 @@ func TestBrowseAceitaFiltroInlineNoTermo(t *testing.T) {
 func TestBrowseOrdenaPorUso(t *testing.T) {
 	store := newStore(
 		domain.Usage{ToolID: "k8s/pods", Runs: 20, LastRun: testNow},
-		domain.Usage{ToolID: "git/stash", Favorite: true},
+		domain.Usage{ToolID: "example/stash", Favorite: true},
 	)
 	svc := service.NewCatalog(fixture(), prefixSearcher{}, store, fixedClock())
 
@@ -146,8 +146,8 @@ func TestBrowseOrdenaPorUso(t *testing.T) {
 		t.Fatalf("Browse: %v", err)
 	}
 	// Favorita ganha o piso de 1000, então vem antes da mais executada.
-	if got := page.Items[0].Tool.ID; got != "git/stash" {
-		t.Errorf("primeiro = %s, quero git/stash", got)
+	if got := page.Items[0].Tool.ID; got != "example/stash" {
+		t.Errorf("primeiro = %s, quero example/stash", got)
 	}
 	if got := page.Items[1].Tool.ID; got != "k8s/pods" {
 		t.Errorf("segundo = %s, quero k8s/pods", got)
@@ -300,18 +300,18 @@ func TestToggleFavoriteRejeitaToolInexistente(t *testing.T) {
 func TestFavoritoExternoPermaneceAssociadoAoMesmoToolID(t *testing.T) {
 	repo := fixture()
 	repo.tools = append(repo.tools, domain.Tool{
-		ID: "token-usage", Name: "tokens", Category: "k8s", Kind: domain.KindProcess,
+		ID: "example-tool", Name: "example", Category: "k8s", Kind: domain.KindProcess,
 		Runtime: &domain.ExternalRuntime{UIMode: "screen-v1", ProtocolMin: 1, ProtocolMax: 1},
 	})
 	store := newStore()
 	first := service.NewCatalog(repo, prefixSearcher{}, store, fixedClock())
-	if favorite, err := first.ToggleFavorite(context.Background(), "token-usage"); err != nil || !favorite {
+	if favorite, err := first.ToggleFavorite(context.Background(), "example-tool"); err != nil || !favorite {
 		t.Fatalf("favoritar externa: favorite=%v err=%v", favorite, err)
 	}
 	// Recriar o serviço simula reiniciar a engine e redescobrir o manifest.
 	second := service.NewCatalog(repo, prefixSearcher{}, store, fixedClock())
-	usage, err := second.Usage(context.Background(), "token-usage")
-	if err != nil || !usage.Favorite || usage.ToolID != "token-usage" {
+	usage, err := second.Usage(context.Background(), "example-tool")
+	if err != nil || !usage.Favorite || usage.ToolID != "example-tool" {
 		t.Fatalf("uso após redescoberta = %+v, %v", usage, err)
 	}
 }

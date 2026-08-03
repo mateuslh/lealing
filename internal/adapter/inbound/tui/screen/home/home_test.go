@@ -24,25 +24,51 @@ import (
 )
 
 // Estes testes montam o caminho real — registry, buscador fuzzy e serviço —
-// e só trocam a persistência por memória. É a integração que interessa: os
-// bugs de layout aparecem com o catálogo cheio, não com três tools de
-// mentira.
+// sobre um catálogo externo representativo. A engine de produção não publica
+// tools padrão; o lote vive aqui apenas para exercitar busca e geometria.
 
-func newTestModel(t *testing.T) *Model {
-	t.Helper()
-	return newTestModelWith(t, nil)
+func catalogFixture() []outbound.ToolProvider {
+	tool := func(id, name string, category domain.CategoryID) domain.Tool {
+		return domain.Tool{
+			ID: domain.ToolID(id), Name: name, Summary: "Tool externa usada no teste da home.",
+			Category: category, Kind: domain.KindProcess,
+			Runtime: &domain.ExternalRuntime{
+				Executable: "lealing-tool-example", ProtocolMin: 1, ProtocolMax: 1, UIMode: "screen-v1",
+			},
+		}
+	}
+	tools := []domain.Tool{
+		tool("system-alpha", "Sistema Alpha", catalog.System.ID),
+		tool("system-beta", "Sistema Beta", catalog.System.ID),
+		tool("ai-alpha", "IA Alpha", catalog.AI.ID),
+		tool("utility-alpha", "Utilitário Alpha", catalog.Utilities.ID),
+		tool("utility-beta", "Utilitário Beta", catalog.Utilities.ID),
+		tool("development-alpha", "Desenvolvimento Alpha", catalog.Development.ID),
+		tool("development-beta", "Desenvolvimento Beta", catalog.Development.ID),
+		tool("network-alpha", "Rede Alpha", catalog.Network.ID),
+		tool("network-beta", "Rede Beta", catalog.Network.ID),
+		tool("development-gamma", "Desenvolvimento Gamma", catalog.Development.ID),
+		tool("development-delta", "Desenvolvimento Delta", catalog.Development.ID),
+		tool("network-gamma", "Rede Gamma", catalog.Network.ID),
+		tool("development-epsilon", "Desenvolvimento Epsilon", catalog.Development.ID),
+		tool("development-zeta", "Desenvolvimento Zeta", catalog.Development.ID),
+		tool("development-eta", "Desenvolvimento Eta", catalog.Development.ID),
+	}
+	tools[0].Keywords = []string{"literal", "exato"}
+	tools[5].Requirements = []domain.Requirement{{Executable: "gh", Name: "GitHub CLI"}}
+	return []outbound.ToolProvider{&registry.Static{
+		Label: "fixture externo", Tools: tools, Categories: catalog.Categories(),
+	}}
 }
 
-// newTestModelWith monta a home com um conjunto de telas nativas. Passar
-// telas é o que distingue "abrir dentro da TUI" de "despachar ao Launcher".
-func newTestModelWith(t *testing.T, screens tui.Screens) *Model {
+func newTestModel(t *testing.T) *Model {
 	t.Helper()
 
 	clock := outbound.ClockFunc(func() time.Time {
 		return time.Date(2026, 7, 30, 15, 0, 0, 0, time.UTC)
 	})
 
-	repo := registry.New(catalog.Providers(), registry.WithStrict(true))
+	repo := registry.New(catalogFixture(), registry.WithStrict(true))
 	svc := service.NewCatalog(repo, search.NewFuzzy(), persistence.NewMemoryUsage(), clock)
 
 	m := New(Config{
@@ -51,7 +77,6 @@ func newTestModelWith(t *testing.T, screens tui.Screens) *Model {
 		Prefs:         svc,
 		Prerequisites: service.NewPrerequisites(repo, nil),
 		Now:           clock.Now,
-		Screens:       screens,
 	})
 
 	// Executa a carga inicial de forma síncrona.
@@ -62,7 +87,7 @@ func newTestModelWith(t *testing.T, screens tui.Screens) *Model {
 		t.Fatalf("carga do catálogo falhou: %v", m.err)
 	}
 	if m.highlights.TotalTools == 0 {
-		t.Fatal("catálogo embutido veio vazio")
+		t.Fatal("catálogo externo de teste veio vazio")
 	}
 	return m
 }
@@ -145,7 +170,7 @@ func typeText(t *testing.T, m *Model, text string) *Model {
 	return m
 }
 
-func TestCatalogoEmbutidoValida(t *testing.T) {
+func TestCatalogoExternoValida(t *testing.T) {
 	// registry.WithStrict(true) rejeita tool inválida, ID duplicado e
 	// categoria não declarada. newTestModel falha se algo disso ocorrer.
 	m := newTestModel(t)
@@ -171,14 +196,14 @@ func TestBuscaFiltraEExecutaAtalhos(t *testing.T) {
 		t.Fatal("Capturing = false durante a busca; “q” fecharia o programa")
 	}
 
-	// "energia" casa pelo nome; "pmset" só casa pelas keywords, que é o
-	// caminho que a busca precisa cobrir.
-	m = typeText(t, m, "pmset")
+	// "literal" só casa pelas keywords, que é o caminho que a busca precisa
+	// cobrir.
+	m = typeText(t, m, "literal")
 	if m.results.Total == 0 {
-		t.Fatal("busca por “pmset” não achou nada")
+		t.Fatal("busca por “literal” não achou nada")
 	}
-	if got := m.results.Items[0].Tool.ID; got != "power-control" {
-		t.Errorf("primeiro resultado = %s, quero power-control", got)
+	if got := m.results.Items[0].Tool.ID; got != "system-alpha" {
+		t.Errorf("primeiro resultado = %s, quero system-alpha", got)
 	}
 
 	m, _ = press(t, m, "esc")
@@ -192,8 +217,7 @@ func TestBuscaAceitaFiltroInline(t *testing.T) {
 	m, _ = press(t, m, "/")
 	m = typeText(t, m, "cat:ai")
 
-	// Sem instalações externas no fixture, a categoria de IA contém apenas
-	// a troca de contas. A token-usage entra por outro provider em runtime.
+	// O fixture possui uma única extensão na categoria de IA.
 	if m.results.Total != 1 {
 		t.Fatalf("filtro cat:ai devolveu %d, quero 1", m.results.Total)
 	}
@@ -201,7 +225,7 @@ func TestBuscaAceitaFiltroInline(t *testing.T) {
 	for _, item := range m.results.Items {
 		got[string(item.Tool.ID)] = true
 	}
-	for _, want := range []string{"claude-accounts"} {
+	for _, want := range []string{"ai-alpha"} {
 		if !got[want] {
 			t.Errorf("cat:ai não trouxe %s (veio %v)", want, got)
 		}
@@ -466,12 +490,11 @@ func (s stubScreen) Update(tea.Msg) (tui.Screen, tea.Cmd) { return s, nil }
 func (stubScreen) View(tui.Frame) string                  { return "" }
 func (stubScreen) Hints() []tui.Hint                      { return nil }
 
-// Abrir uma tool nativa é o único uso que ela jamais registra: não há runner
-// que a atenda, então quem não contabilizar aqui deixa "recentes" vazio para
-// sempre — que era o bug.
-func TestAbrirToolNativaAlimentaRecentes(t *testing.T) {
-	const id = "system-info"
-	m := newTestModelWith(t, tui.Screens{id: func() tui.Screen { return stubScreen{} }})
+// Uma sessão screen-v1 não passa pelo Launcher comum; a home precisa registrar
+// sua abertura para alimentar recentes e sugestões.
+func TestAbrirToolInterativaAlimentaRecentes(t *testing.T) {
+	const id = "system-alpha"
+	m := newTestModel(t)
 
 	if len(m.highlights.Recent) != 0 {
 		t.Fatalf("recentes começou com %d itens, quero 0", len(m.highlights.Recent))
@@ -512,7 +535,7 @@ func TestHomeExpoeRefresh(t *testing.T) {
 // A loja não está no catálogo: ela chega por uma factory própria, e é o
 // atalho da home que a abre.
 func TestAtalhoMarketplaceAbreTelaDedicada(t *testing.T) {
-	m := newTestModelWith(t, nil)
+	m := newTestModel(t)
 	m.marketplaceScreen = func() tui.Screen { return stubScreen{} }
 
 	_, cmd := press(t, m, "m")
@@ -528,7 +551,7 @@ func TestAtalhoMarketplaceAbreTelaDedicada(t *testing.T) {
 // Sem factory ligada, o atalho não pode explodir: a engine precisa abrir
 // mesmo quando o marketplace não foi composto.
 func TestAtalhoMarketplaceSemFactoryNaoQuebra(t *testing.T) {
-	m := newTestModelWith(t, nil)
+	m := newTestModel(t)
 	if _, cmd := press(t, m, "m"); cmd != nil {
 		t.Fatalf("atalho m produziu %T sem factory", cmd())
 	}
@@ -544,8 +567,8 @@ func (s requirementCheckerStub) Missing(
 }
 
 func TestToolComRequisitoAusenteAbreDiagnostico(t *testing.T) {
-	const id = domain.ToolID("clone-repo-bradesco")
-	m := newTestModelWith(t, tui.Screens{id: func() tui.Screen { return stubScreen{} }})
+	const id = domain.ToolID("development-alpha")
+	m := newTestModel(t)
 	m.prereqs = requirementCheckerStub{missing: []domain.Requirement{
 		{Executable: "gh", Name: "GitHub CLI"},
 	}}
@@ -558,7 +581,7 @@ func TestToolComRequisitoAusenteAbreDiagnostico(t *testing.T) {
 		}
 	}
 	if tool.ID == "" {
-		t.Fatal("clone-repo-bradesco não apareceu no catálogo")
+		t.Fatal("development-alpha não apareceu no catálogo")
 	}
 
 	check := m.openTool(tool)
@@ -615,7 +638,7 @@ func marketListing(id, name string, installed string, update bool) coremarket.Li
 // loadVitrine roda a carga do marketplace de forma síncrona.
 func loadVitrine(t *testing.T, catalog coremarket.Catalog) *Model {
 	t.Helper()
-	m := newTestModelWith(t, nil)
+	m := newTestModel(t)
 	m.marketplace = fakeMarketplace{catalog: catalog}
 	next, _ := m.Update(m.loadMarketplace()())
 	return next.(*Model)
@@ -808,7 +831,7 @@ func TestPaineisOmitidosSaoAnunciadosNaMoldura(t *testing.T) {
 
 // O atalho c abre a configuração, que também não é uma tool do catálogo.
 func TestAtalhoConfiguracaoAbreTelaDedicada(t *testing.T) {
-	m := newTestModelWith(t, nil)
+	m := newTestModel(t)
 	m.settingsScreen = func() tui.Screen { return stubScreen{} }
 
 	_, cmd := press(t, m, "c")
@@ -819,7 +842,7 @@ func TestAtalhoConfiguracaoAbreTelaDedicada(t *testing.T) {
 		t.Fatalf("atalho c devolveu %T", cmd())
 	}
 
-	sem := newTestModelWith(t, nil)
+	sem := newTestModel(t)
 	if _, cmd := press(t, sem, "c"); cmd != nil {
 		t.Fatalf("atalho c produziu %T sem factory", cmd())
 	}
@@ -830,7 +853,7 @@ func TestAtalhoConfiguracaoAbreTelaDedicada(t *testing.T) {
 func TestConfiguracaoMudaSaudacaoEConsultaSemReiniciar(t *testing.T) {
 	name := "Chefia"
 	consulta := false
-	m := newTestModelWith(t, nil)
+	m := newTestModel(t)
 	m.marketplace = fakeMarketplace{}
 	m.greetingName = func() string { return name }
 	m.marketplaceOnHome = func() bool { return consulta }

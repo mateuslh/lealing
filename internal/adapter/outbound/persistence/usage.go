@@ -49,6 +49,7 @@ func NewUsageFile(path string, debounce time.Duration) *UsageFile {
 // record é a forma serializada de domain.Usage. Manter um DTO separado
 // impede que uma mudança no domínio quebre arquivos já gravados em disco.
 type record struct {
+	Host     string    `json:"host,omitempty"`
 	Runs     int       `json:"runs,omitempty"`
 	LastRun  time.Time `json:"last_run,omitempty"`
 	Favorite bool      `json:"favorite,omitempty"`
@@ -94,7 +95,7 @@ func (s *UsageFile) Load(context.Context) (map[domain.ToolID]domain.Usage, error
 	}
 
 	for id, r := range ff.Usage {
-		s.data[id] = domain.Usage{ToolID: id, Runs: r.Runs, LastRun: r.LastRun, Favorite: r.Favorite}
+		s.data[id] = domain.Usage{Host: r.Host, ToolID: id, Runs: r.Runs, LastRun: r.LastRun, Favorite: r.Favorite}
 	}
 	s.loaded = true
 	return s.snapshotLocked(), nil
@@ -150,7 +151,7 @@ func (s *UsageFile) writeLocked() error {
 		if u.Runs == 0 && !u.Favorite {
 			continue // não persiste linha vazia
 		}
-		ff.Usage[id] = record{Runs: u.Runs, LastRun: u.LastRun, Favorite: u.Favorite}
+		ff.Usage[id] = record{Host: u.Host, Runs: u.Runs, LastRun: u.LastRun, Favorite: u.Favorite}
 	}
 
 	raw, err := json.MarshalIndent(ff, "", "  ")

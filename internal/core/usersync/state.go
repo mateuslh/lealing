@@ -10,16 +10,33 @@ package usersync
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mateuslh/lealing/internal/core/marketplace"
 )
 
 // StateVersion marca o formato do documento. Ler um documento de versão
 // futura é recusado em vez de interpretado pela metade: preferências
 // entendidas errado voltam para o disco erradas, e o push seguinte propaga o
 // estrago para as outras máquinas.
-const StateVersion = 1
+const StateVersion = 3
+
+const (
+	maxUsageEntries   = 10_000
+	maxSourceEntries  = 100
+	maxToolEntries    = 2_000
+	maxDisabledHosts  = 100
+	maxRuns           = 1_000_000_000_000
+	maxMetadataLength = 256
+)
+
+var (
+	validReferencePart = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	validToolVersion   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$`)
+)
 
 // RemotePath é onde o documento mora dentro do repositório.
 const RemotePath = "state.json"
@@ -41,6 +58,7 @@ var (
 // da engine não é reaproveitado aqui de propósito: este é um contrato
 // serializado que precisa sobreviver a refatorações internas.
 type ToolUsage struct {
+	Host     string    `json:"host"`
 	ID       string    `json:"id"`
 	Runs     int       `json:"runs"`
 	LastRun  time.Time `json:"lastRun,omitempty"`
@@ -50,9 +68,9 @@ type ToolUsage struct {
 // InstalledTool é uma tool externa presente na máquina de origem. Só a
 // referência viaja; binário nenhum é sincronizado.
 type InstalledTool struct {
+	Host    string `json:"host"`
 	ID      string `json:"id"`
 	Version string `json:"version"`
-	Origin  string `json:"origin,omitempty"`
 }
 
 // MarketplaceSource é um repositório de tools cadastrado.
@@ -77,7 +95,7 @@ type State struct {
 
 	Usage   []ToolUsage         `json:"usage,omitempty"`
 	Sources []MarketplaceSource `json:"sources,omitempty"`
-	// DisabledBuiltins acompanha as origens: desligar o índice oficial é uma
+	// DisabledBuiltins acompanha as origens: desligar o índice padrão é uma
 	// preferência tanto quanto adicionar um repositório.
 	DisabledBuiltins []string        `json:"disabledBuiltins,omitempty"`
 	Tools            []InstalledTool `json:"tools,omitempty"`
@@ -143,42 +161,119 @@ func (s Selection) Empty() bool {
 
 // Validate recusa um documento que a engine não saberia aplicar.
 func (s State) Validate() error {
-	if s.Version > StateVersion {
-		return fmt.Errorf(
-			"o estado remoto foi escrito por uma versão mais nova do lealing (formato %d)", s.Version)
+	if s.Version != StateVersion {
+		return fmt.Errorf("formato de estado remoto não suportado: %d (esperado %d)", s.Version, StateVersion)
+	}
+	if s.UpdatedAt.IsZero() {
+		return errors.New("estado remoto não informa updatedAt")
+	}
+	if err := validateMetadata("device", s.Device); err != nil {
+		return err
+	}
+	if err := validateMetadata("engine", s.Engine); err != nil {
+		return err
+	}
+	if len(s.Usage) > maxUsageEntries {
+		return fmt.Errorf("estado remoto excede %d registros de uso", maxUsageEntries)
 	}
 	seenUsage := make(map[string]bool, len(s.Usage))
 	for _, usage := range s.Usage {
+		key := referenceKey(usage.Host, usage.ID)
 		switch {
-		case strings.TrimSpace(usage.ID) == "":
-			return errors.New("estado remoto tem uso sem ID de tool")
-		case usage.Runs < 0:
-			return fmt.Errorf("contagem de uso negativa em %s", usage.ID)
-		case seenUsage[usage.ID]:
-			return fmt.Errorf("uso duplicado no estado remoto: %s", usage.ID)
+		case !validReferencePart.MatchString(usage.Host):
+			return fmt.Errorf("host inválido no uso de %s: %q", usage.ID, usage.Host)
+		case !validReferencePart.MatchString(usage.ID):
+			return fmt.Errorf("ID de tool inválido no estado remoto: %q", usage.ID)
+		case usage.Runs < 0 || usage.Runs > maxRuns:
+			return fmt.Errorf("contagem de uso inválida em %s/%s: %d", usage.Host, usage.ID, usage.Runs)
+		case !usage.LastRun.IsZero() && usage.LastRun.After(s.UpdatedAt.Add(24*time.Hour)):
+			return fmt.Errorf("lastRun de %s/%s está depois do documento", usage.Host, usage.ID)
+		case seenUsage[key]:
+			return fmt.Errorf("uso duplicado no estado remoto: %s/%s", usage.Host, usage.ID)
 		}
-		seenUsage[usage.ID] = true
+		seenUsage[key] = true
+	}
+	if len(s.Sources) > maxSourceEntries {
+		return fmt.Errorf("estado remoto excede %d origens", maxSourceEntries)
 	}
 	seenSource := make(map[string]bool, len(s.Sources))
 	for _, source := range s.Sources {
-		if strings.TrimSpace(source.Name) == "" || strings.TrimSpace(source.Ref) == "" {
-			return errors.New("estado remoto tem origem sem nome ou endereço")
+		origin := marketplace.Origin{
+			Name: source.Name, Label: source.Label, Kind: marketplace.OriginKind(source.Kind),
+			Ref: source.Ref, Enabled: source.Enabled,
+		}
+		if err := origin.Validate(); err != nil {
+			return fmt.Errorf("origem %q inválida no estado remoto: %w", source.Name, err)
 		}
 		if seenSource[source.Name] {
 			return fmt.Errorf("origem duplicada no estado remoto: %s", source.Name)
 		}
 		seenSource[source.Name] = true
 	}
+	if len(s.DisabledBuiltins) > maxDisabledHosts {
+		return fmt.Errorf("estado remoto excede %d origens embutidas desativadas", maxDisabledHosts)
+	}
+	seenDisabled := make(map[string]bool, len(s.DisabledBuiltins))
+	for _, host := range s.DisabledBuiltins {
+		if !validReferencePart.MatchString(host) {
+			return fmt.Errorf("host embutido inválido no estado remoto: %q", host)
+		}
+		if seenDisabled[host] {
+			return fmt.Errorf("host embutido duplicado no estado remoto: %s", host)
+		}
+		seenDisabled[host] = true
+	}
+	if len(s.Tools) > maxToolEntries {
+		return fmt.Errorf("estado remoto excede %d tools instaladas", maxToolEntries)
+	}
+	seenTools := make(map[string]bool, len(s.Tools))
+	for _, tool := range s.Tools {
+		key := referenceKey(tool.Host, tool.ID)
+		switch {
+		case !validReferencePart.MatchString(tool.Host):
+			return fmt.Errorf("host inválido na tool instalada %s: %q", tool.ID, tool.Host)
+		case !validReferencePart.MatchString(tool.ID):
+			return fmt.Errorf("ID inválido na tool instalada: %q", tool.ID)
+		case !validToolVersion.MatchString(tool.Version):
+			return fmt.Errorf("versão inválida em %s/%s: %q", tool.Host, tool.ID, tool.Version)
+		case seenTools[key]:
+			return fmt.Errorf("tool instalada duplicada no estado remoto: %s/%s", tool.Host, tool.ID)
+		}
+		seenTools[key] = true
+	}
 	return nil
 }
+
+func validateMetadata(field, value string) error {
+	if len(value) > maxMetadataLength || strings.ContainsAny(value, "\r\n\x00") {
+		return fmt.Errorf("%s inválido no estado remoto", field)
+	}
+	return nil
+}
+
+func referenceKey(host, id string) string { return host + "\x00" + id }
 
 // Normalize ordena as coleções para que dois envios do mesmo conteúdo
 // produzam bytes idênticos — sem isso, o histórico do repositório encheria de
 // commits que só embaralham linhas.
 func (s *State) Normalize() {
-	sort.Slice(s.Usage, func(i, j int) bool { return s.Usage[i].ID < s.Usage[j].ID })
+	s.UpdatedAt = s.UpdatedAt.UTC()
+	for index := range s.Usage {
+		s.Usage[index].LastRun = s.Usage[index].LastRun.UTC()
+	}
+	sort.Slice(s.Usage, func(i, j int) bool {
+		if s.Usage[i].Host != s.Usage[j].Host {
+			return s.Usage[i].Host < s.Usage[j].Host
+		}
+		return s.Usage[i].ID < s.Usage[j].ID
+	})
 	sort.Slice(s.Sources, func(i, j int) bool { return s.Sources[i].Name < s.Sources[j].Name })
-	sort.Slice(s.Tools, func(i, j int) bool { return s.Tools[i].ID < s.Tools[j].ID })
+	sort.Slice(s.Tools, func(i, j int) bool {
+		if s.Tools[i].Host != s.Tools[j].Host {
+			return s.Tools[i].Host < s.Tools[j].Host
+		}
+		return s.Tools[i].ID < s.Tools[j].ID
+	})
 	sort.Strings(s.DisabledBuiltins)
 }
 

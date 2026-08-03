@@ -27,22 +27,37 @@ func (id ToolID) Namespace() string {
 	return ""
 }
 
+// ToolRef identifica uma tool dentro do provider que a publicou. O ID sozinho
+// não basta: dois providers podem declarar o mesmo valor e a prioridade do
+// catálogo pode fazer outro deles vencer depois de uma recarga.
+type ToolRef struct {
+	Host string
+	ID   ToolID
+}
+
+// String devolve a referência qualificada usada em diagnóstico.
+func (r ToolRef) String() string {
+	if r.Host == "" {
+		return string(r.ID)
+	}
+	return r.Host + "/" + string(r.ID)
+}
+
 // Kind descreve como uma tool é executada. O catálogo é agnóstico quanto a
 // isso; quem decide o runner apropriado é a porta de saída ToolRunner.
 type Kind uint8
 
 const (
-	// KindBuiltin roda dentro do próprio processo da TUI, assumindo a tela.
-	KindBuiltin Kind = iota
-	// KindProcess dispara um binário externo, suspendendo a TUI enquanto roda.
-	KindProcess
+	// KindProcess dispara um binário externo. O manifest decide se ele usa o
+	// protocolo interativo da TUI ou uma execução simples.
+	KindProcess Kind = iota
 	// KindScript executa um script interpretado (shell, python, node...).
 	KindScript
 	// KindRemote fala com um serviço remoto (HTTP, gRPC, SSH).
 	KindRemote
 )
 
-var kindNames = [...]string{"builtin", "process", "script", "remote"}
+var kindNames = [...]string{"process", "script", "remote"}
 
 // String implementa fmt.Stringer.
 func (k Kind) String() string {
@@ -81,6 +96,10 @@ func (r Risk) NeedsConfirmation() bool { return r >= RiskDestructive }
 // Tool é a unidade central do catálogo: uma capacidade que o usuário pode
 // invocar. É um agregado imutável — o registry monta, o resto só lê.
 type Tool struct {
+	// Host é a identidade estável da origem que publicou a tool. Providers
+	// simples herdam ToolProvider.Name; o provider de instalações lê o valor
+	// que o instalador persistiu a partir do índice escolhido.
+	Host     string
 	ID       ToolID
 	Name     string
 	Summary  string // uma linha, cabe em lista
@@ -115,6 +134,9 @@ type Tool struct {
 	// continua declarativo: guardar o caminho não inicia nem carrega o binário.
 	Runtime *ExternalRuntime
 }
+
+// Ref devolve a identidade completa da tool no catálogo.
+func (t Tool) Ref() ToolRef { return ToolRef{Host: t.Host, ID: t.ID} }
 
 // ExternalRuntime descreve como abrir uma tool instalada. O caminho já foi
 // confinado pelo provider ao diretório versionado; a existência só é conferida
@@ -243,6 +265,9 @@ type Category struct {
 // Usage guarda o comportamento observado de uma tool para um usuário.
 // É estado mutável, vive fora do agregado Tool e é persistido em separado.
 type Usage struct {
+	// Host é a origem qualificada da tool. Mantê-lo junto do ID impede que
+	// favoritos e histórico atravessem para uma implementação homônima.
+	Host     string
 	ToolID   ToolID
 	Runs     int
 	LastRun  time.Time

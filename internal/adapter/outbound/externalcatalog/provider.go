@@ -15,12 +15,13 @@ import (
 )
 
 type Provider struct {
-	root       string
-	categories map[domain.CategoryID]bool
-	reserved   map[domain.ToolID]bool
-	target     toolmanifest.Target
-	strict     bool
-	log        outbound.Logger
+	root        string
+	categories  map[domain.CategoryID]bool
+	reserved    map[domain.ToolID]bool
+	target      toolmanifest.Target
+	strict      bool
+	defaultHost string
+	log         outbound.Logger
 
 	mu     sync.Mutex
 	loaded bool
@@ -36,7 +37,10 @@ type Options struct {
 	Reserved   []domain.ToolID
 	Target     toolmanifest.Target
 	Strict     bool
-	Logger     outbound.Logger
+	// DefaultHost identifica instalações anteriores ao metadado de
+	// procedência. O bootstrap usa a origem oficial para a migração local.
+	DefaultHost string
+	Logger      outbound.Logger
 }
 
 func New(opts Options) *Provider {
@@ -50,7 +54,7 @@ func New(opts Options) *Provider {
 	}
 	return &Provider{
 		root: opts.Root, categories: categories, reserved: reserved,
-		target: opts.Target, strict: opts.Strict, log: opts.Logger,
+		target: opts.Target, strict: opts.Strict, defaultHost: opts.DefaultHost, log: opts.Logger,
 	}
 }
 
@@ -108,11 +112,11 @@ func (p *Provider) discover(ctx context.Context) ([]domain.Tool, error) {
 			continue
 		}
 		if p.reserved[tool.ID] {
-			err := fmt.Errorf("tool externa %q tenta sobrescrever ID builtin reservado", tool.ID)
+			err := fmt.Errorf("tool externa %q tenta sobrescrever ID reservado", tool.ID)
 			if p.strict {
 				return nil, err
 			}
-			p.warn("ID builtin reservado ignorado", "tool", tool.ID)
+			p.warn("ID reservado ignorado", "tool", tool.ID)
 			continue
 		}
 		if seen[tool.ID] {
@@ -167,6 +171,17 @@ func (p *Provider) readActive(directory string) (*domain.Tool, error) {
 	tool, err := manifest.Tool(versionDir, executable)
 	if err != nil {
 		return nil, err
+	}
+	hostRaw, hostErr := os.ReadFile(filepath.Join(versionDir, "host"))
+	if hostErr == nil {
+		tool.Host = strings.TrimSpace(string(hostRaw))
+	} else if os.IsNotExist(hostErr) {
+		tool.Host = p.defaultHost
+	} else {
+		return nil, fmt.Errorf("%s@%s: ler host: %w", directory, version, hostErr)
+	}
+	if tool.Host == "" {
+		return nil, fmt.Errorf("%s@%s: instalação sem host", directory, version)
 	}
 	return &tool, nil
 }

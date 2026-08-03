@@ -92,7 +92,7 @@ func Fields() []Field {
 		{
 			Key: KeyMarketplaceIndex, Section: SectionMarketplace.ID,
 			Label:       "Índice oficial",
-			Description: "URL HTTPS do índice embutido. É a única origem que pode publicar nos canais official e verified.",
+			Description: "URL HTTPS do índice padrão. É a única origem que pode publicar nos canais official e verified.",
 			Kind:        KindText, Placeholder: "https://…/index.json",
 			Restart: true, Validate: validateHTTPS,
 		},

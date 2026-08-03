@@ -26,8 +26,6 @@ func RiskGlyph(t *theme.Theme, r domain.Risk) (string, lipgloss.Style) {
 // KindGlyph devolve o marcador do modo de execução.
 func KindGlyph(k domain.Kind) string {
 	switch k {
-	case domain.KindBuiltin:
-		return "◈"
 	case domain.KindProcess:
 		return "▶"
 	case domain.KindScript:

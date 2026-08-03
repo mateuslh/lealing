@@ -14,7 +14,7 @@ func TestToolListMostraTagsNoItem(t *testing.T) {
 	const width = 48
 	list := ToolList{
 		Items: []domain.Match{{Tool: domain.Tool{
-			ID: "clone-repo-bradesco", Name: "Clone Repo Bradesco",
+			ID: "example-tool", Name: "Example Tool",
 			Category: "dev", Tags: []domain.Tag{"bradesco"},
 		}}},
 		Categories: map[domain.CategoryID]domain.Category{

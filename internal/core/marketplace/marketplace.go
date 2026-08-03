@@ -479,7 +479,8 @@ func (s *Service) Install(ctx context.Context, ref string) (toolinstall.Installa
 		defer prepared.Cleanup()
 	}
 	installation, err := s.config.Installer.InstallLocal(ctx, toolinstall.InstallRequest{
-		SourceDir: prepared.Directory, ExpectedID: entry.ID, ExpectedVersion: entry.Version,
+		Host: entry.Origin.Name, SourceDir: prepared.Directory,
+		ExpectedID: entry.ID, ExpectedVersion: entry.Version,
 		ExpectedManifest: &toolinstall.ManifestExpectation{
 			ID: entry.ID, Version: entry.Version, Name: entry.Name, Summary: entry.Summary,
 			Detail: entry.Detail, Category: entry.Category, Risk: entry.Risk, Glyph: entry.Glyph,

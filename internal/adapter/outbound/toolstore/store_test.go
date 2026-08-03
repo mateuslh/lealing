@@ -56,26 +56,30 @@ func TestInstallVerificaChecksumETrocaVersaoAtiva(t *testing.T) {
 	first := source(t, "1.0.0", "primeiro")
 	sum := sha256.Sum256([]byte("primeiro"))
 	installed, err := store(root).Install(context.Background(), toolinstall.InstallRequest{
-		SourceDir: first, ExpectedSHA256: hex.EncodeToString(sum[:]),
+		Host: "lealing", SourceDir: first, ExpectedSHA256: hex.EncodeToString(sum[:]),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if installed.Version != "1.0.0" || installed.PreviousVersion != "" {
+	if installed.Host != "lealing" || installed.Version != "1.0.0" || installed.PreviousVersion != "" {
 		t.Fatalf("instalação = %+v", installed)
 	}
 
 	second := source(t, "1.1.0", "segundo")
-	updated, err := store(root).Install(context.Background(), toolinstall.InstallRequest{SourceDir: second})
+	updated, err := store(root).Install(context.Background(), toolinstall.InstallRequest{Host: "outro-host", SourceDir: second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.PreviousVersion != "1.0.0" {
+	if updated.Host != "outro-host" || updated.PreviousVersion != "1.0.0" {
 		t.Fatalf("atualização = %+v", updated)
 	}
 	active, _ := os.ReadFile(filepath.Join(root, "demo", "active"))
 	if strings.TrimSpace(string(active)) != "1.1.0" {
 		t.Errorf("active = %q", active)
+	}
+	listed, err := store(root).List(context.Background())
+	if err != nil || len(listed) != 1 || listed[0].Host != "outro-host" {
+		t.Fatalf("instalações = %+v, erro = %v", listed, err)
 	}
 }
 
@@ -155,8 +159,9 @@ func TestManifestNovoInvalidoNaoSubstituiInstalacaoSaudavel(t *testing.T) {
 func TestRollbackTrocaAtivaEAnterior(t *testing.T) {
 	root := t.TempDir()
 	s := store(root)
-	for _, version := range []string{"1.0.0", "1.1.0"} {
-		if _, err := s.Install(context.Background(), toolinstall.InstallRequest{SourceDir: source(t, version, version)}); err != nil {
+	for index, version := range []string{"1.0.0", "1.1.0"} {
+		host := []string{"primeiro-host", "segundo-host"}[index]
+		if _, err := s.Install(context.Background(), toolinstall.InstallRequest{Host: host, SourceDir: source(t, version, version)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -164,7 +169,7 @@ func TestRollbackTrocaAtivaEAnterior(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Version != "1.0.0" || result.PreviousVersion != "1.1.0" {
+	if result.Host != "primeiro-host" || result.Version != "1.0.0" || result.PreviousVersion != "1.1.0" {
 		t.Fatalf("rollback = %+v", result)
 	}
 }

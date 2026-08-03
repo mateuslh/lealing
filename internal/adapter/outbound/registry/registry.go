@@ -8,6 +8,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/mateuslh/lealing/internal/core/domain"
@@ -132,12 +133,21 @@ func (r *Registry) doLoad(ctx context.Context) error {
 		byID  = make(map[domain.ToolID]domain.Tool, 256)
 		cats  []domain.Category
 		seen  = make(map[domain.CategoryID]bool)
+		hosts = make(map[string]bool, len(r.providers))
 	)
 
 	for _, p := range r.providers {
+		host := strings.TrimSpace(p.Name())
+		if host == "" {
+			return fmt.Errorf("provider sem host")
+		}
+		if hosts[host] {
+			return fmt.Errorf("host de provider duplicado: %s", host)
+		}
+		hosts[host] = true
 		ts, cs, err := p.Provide(ctx)
 		if err != nil {
-			return fmt.Errorf("provider %s: %w", p.Name(), err)
+			return fmt.Errorf("provider %s: %w", host, err)
 		}
 
 		for _, c := range cs {
@@ -149,11 +159,17 @@ func (r *Registry) doLoad(ctx context.Context) error {
 		}
 
 		for _, t := range ts {
+			// Providers genéricos de instalações podem devolver tools de várias
+			// origens. Neles, o host foi persistido pelo instalador a partir do
+			// índice; providers simples continuam herdando seu próprio nome.
+			if strings.TrimSpace(t.Host) == "" {
+				t.Host = host
+			}
 			if err := t.Validate(); err != nil {
 				if r.strict {
-					return fmt.Errorf("provider %s: %w", p.Name(), err)
+					return fmt.Errorf("provider %s: %w", host, err)
 				}
-				r.warn("tool descartada", "provider", p.Name(), "err", err)
+				r.warn("tool descartada", "provider", host, "err", err)
 				continue
 			}
 			if r.platform != 0 && !t.RunsOn(r.platform) {
@@ -162,9 +178,9 @@ func (r *Registry) doLoad(ctx context.Context) error {
 			}
 			if _, dup := byID[t.ID]; dup {
 				if r.strict {
-					return fmt.Errorf("provider %s: %w", p.Name(), domain.WrapTool(t.ID, domain.ErrDuplicateTool))
+					return fmt.Errorf("provider %s: %w", host, domain.WrapTool(t.ID, domain.ErrDuplicateTool))
 				}
-				r.warn("tool duplicada ignorada", "provider", p.Name(), "tool", t.ID)
+				r.warn("tool duplicada ignorada", "provider", host, "tool", t.ID)
 				continue
 			}
 			byID[t.ID] = t

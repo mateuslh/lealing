@@ -16,6 +16,7 @@ import (
 	"github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
+	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/internal/platform/secrets"
 	"github.com/mateuslh/lealing/internal/platform/xdg"
 )
@@ -73,8 +74,10 @@ func SyncManager(engineVersion string) (usersync.Manager, error) {
 	usage := persistence.NewUsageFile(
 		filepath.Join(directories.Data, UsageFileName), usageDebounce)
 	defer usage.Close()
+	log := outbound.Logger(logging.NewDiscard())
+	catalog := newToolRepository(directories, platform, false, log)
 	return newSyncManager(engineVersion, directories, config,
-		usage, marketplaceSourceStore(directories), newToolManager(directories.Tools)), nil
+		usage, marketplaceSourceStore(directories), newToolManager(directories.Tools), catalog), nil
 }
 
 func newSyncManager(
@@ -84,6 +87,7 @@ func newSyncManager(
 	usage outbound.UsageStore,
 	sources marketplace.SourceStore,
 	installed toolinstall.Manager,
+	catalog outbound.ToolRepository,
 ) usersync.Manager {
 	client := &http.Client{Timeout: time.Minute}
 	return usersync.NewService(usersync.Config{
@@ -95,7 +99,7 @@ func newSyncManager(
 			secrets.New(secretService, directories.Data),
 		),
 		Remote: githubstate.New(githubstate.Config{Client: client}),
-		Local:  usersync.NewLocalState(usage, sources, installed),
+		Local:  usersync.NewLocalState(usage, sources, installed, catalog),
 		Settings: usersyncstore.NewSettings(
 			filepath.Join(directories.Config, SyncSettingsFileName),
 		),

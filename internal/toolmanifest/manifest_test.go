@@ -49,15 +49,15 @@ func opts() toolmanifest.ValidationOptions {
 }
 
 func TestManifestValidoViraToolExterna(t *testing.T) {
-	manifest, err := toolmanifest.ParseAndValidate(validManifest("token-usage"), opts())
+	manifest, err := toolmanifest.ParseAndValidate(validManifest("example-tool"), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool, err := manifest.Tool("/instalacao", "/instalacao/lealing-tool-token-usage")
+	tool, err := manifest.Tool("/instalacao", "/instalacao/lealing-tool-example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.ID != "token-usage" || !tool.Interactive() || tool.Kind != domain.KindProcess {
+	if tool.ID != "example-tool" || !tool.Interactive() || tool.Kind != domain.KindProcess {
 		t.Fatalf("tool = %+v", tool)
 	}
 	if tool.Runtime.ProtocolMin != 1 || len(tool.Runtime.Permissions.ReadPaths) != 1 {
@@ -68,7 +68,7 @@ func TestManifestValidoViraToolExterna(t *testing.T) {
 func TestManifestRecusaCamposInvalidos(t *testing.T) {
 	tests := map[string]func(string) string{
 		"apiVersion": func(s string) string { return strings.Replace(s, "lealing.dev/v1", "lealing.dev/v9", 1) },
-		"id":         func(s string) string { return strings.Replace(s, "id: token-usage", "id: ../token", 1) },
+		"id":         func(s string) string { return strings.Replace(s, "id: example-tool", "id: ../example", 1) },
 		"version":    func(s string) string { return strings.Replace(s, "version: 1.2.3", "version: latest", 1) },
 		"summary multilinha": func(s string) string {
 			return strings.Replace(s, "summary: Faz uma leitura segura.", "summary: |\n  linha um\n  linha dois", 1)
@@ -87,7 +87,7 @@ func TestManifestRecusaCamposInvalidos(t *testing.T) {
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			raw := mutate(string(validManifest("token-usage")))
+			raw := mutate(string(validManifest("example-tool")))
 			if _, err := toolmanifest.ParseAndValidate([]byte(raw), opts()); err == nil {
 				t.Fatal("manifest inválido foi aceito")
 			}

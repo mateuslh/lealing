@@ -72,7 +72,7 @@ func (s *CatalogService) Browse(ctx context.Context, q domain.Query) (domain.Pag
 
 	filtered := make([]domain.Tool, 0, len(all))
 	for _, t := range all {
-		if q.Matches(t, s.usageOf(t.ID)) {
+		if q.Matches(t, s.usageOf(t)) {
 			filtered = append(filtered, t)
 		}
 	}
@@ -81,7 +81,7 @@ func (s *CatalogService) Browse(ctx context.Context, q domain.Query) (domain.Pag
 	if q.Term != "" && s.searcher != nil {
 		matches = s.searcher.Rank(q.Term, filtered)
 		for i := range matches {
-			usage := s.usageOf(matches[i].Tool.ID)
+			usage := s.usageOf(matches[i].Tool)
 			matches[i].Usage = usage
 			// A estratégia de busca entrega relevância textual. Frequência,
 			// recência e favoritos são política da aplicação e entram aqui,
@@ -91,7 +91,7 @@ func (s *CatalogService) Browse(ctx context.Context, q domain.Query) (domain.Pag
 	} else {
 		matches = make([]domain.Match, len(filtered))
 		for i, t := range filtered {
-			matches[i] = domain.Match{Tool: t, Usage: s.usageOf(t.ID)}
+			matches[i] = domain.Match{Tool: t, Usage: s.usageOf(t)}
 		}
 	}
 
@@ -202,7 +202,7 @@ func (s *CatalogService) Highlights(ctx context.Context, limit int) (domain.High
 
 	matches := make([]domain.Match, len(all))
 	for i, t := range all {
-		matches[i] = domain.Match{Tool: t, Usage: s.usageOf(t.ID)}
+		matches[i] = domain.Match{Tool: t, Usage: s.usageOf(t)}
 	}
 
 	for _, m := range matches {
@@ -253,7 +253,8 @@ func (s *CatalogService) Highlights(ctx context.Context, limit int) (domain.High
 
 // ToggleFavorite implementa inbound.Preferences.
 func (s *CatalogService) ToggleFavorite(ctx context.Context, id domain.ToolID) (bool, error) {
-	if _, err := s.repo.ByID(ctx, id); err != nil {
+	tool, err := s.repo.ByID(ctx, id)
+	if err != nil {
 		return false, err
 	}
 	if err := s.ensureUsage(ctx); err != nil {
@@ -262,6 +263,10 @@ func (s *CatalogService) ToggleFavorite(ctx context.Context, id domain.ToolID) (
 
 	s.mu.Lock()
 	u := s.cache[id]
+	if u.Host != "" && u.Host != tool.Host {
+		u = domain.Usage{}
+	}
+	u.Host = tool.Host
 	u.ToolID = id
 	u.Favorite = !u.Favorite
 	s.cache[id] = u
@@ -275,10 +280,14 @@ func (s *CatalogService) ToggleFavorite(ctx context.Context, id domain.ToolID) (
 
 // Usage implementa inbound.Preferences.
 func (s *CatalogService) Usage(ctx context.Context, id domain.ToolID) (domain.Usage, error) {
+	tool, err := s.repo.ByID(ctx, id)
+	if err != nil {
+		return domain.Usage{}, err
+	}
 	if err := s.ensureUsage(ctx); err != nil {
 		return domain.Usage{}, err
 	}
-	return s.usageOf(id), nil
+	return s.usageOf(tool), nil
 }
 
 // RecordRun implementa inbound.Preferences, contabilizando uma execução.
@@ -287,12 +296,20 @@ func (s *CatalogService) Usage(ctx context.Context, id domain.ToolID) (domain.Us
 // tool, e o driving adapter, quando a tool abre uma tela dentro da própria TUI
 // e portanto nunca chega a um runner.
 func (s *CatalogService) RecordRun(ctx context.Context, id domain.ToolID) error {
+	tool, err := s.repo.ByID(ctx, id)
+	if err != nil {
+		return err
+	}
 	if err := s.ensureUsage(ctx); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
 	u := s.cache[id]
+	if u.Host != "" && u.Host != tool.Host {
+		u = domain.Usage{}
+	}
+	u.Host = tool.Host
 	u.ToolID = id
 	u.Runs++
 	u.LastRun = s.clock.Now()
@@ -328,10 +345,14 @@ func (s *CatalogService) ensureUsage(ctx context.Context) error {
 }
 
 // usageOf lê o uso em cache; ausência devolve o zero-value, que é válido.
-func (s *CatalogService) usageOf(id domain.ToolID) domain.Usage {
+func (s *CatalogService) usageOf(tool domain.Tool) domain.Usage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	u := s.cache[id]
-	u.ToolID = id
+	u := s.cache[tool.ID]
+	if u.Host != "" && u.Host != tool.Host {
+		u = domain.Usage{}
+	}
+	u.Host = tool.Host
+	u.ToolID = tool.ID
 	return u
 }

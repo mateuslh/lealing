@@ -7,12 +7,18 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"regexp"
 	"strings"
 )
 
 var ErrInvalidChecksum = errors.New("checksum SHA-256 inválido")
 
+var validHost = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
 type InstallRequest struct {
+	// Host é o nome estável da origem do marketplace. Instalações feitas de
+	// um diretório local usam "local".
+	Host           string
 	SourceDir      string
 	ExpectedSHA256 string
 	// ExpectedID e ExpectedVersion ligam um pacote remoto à entrada escolhida
@@ -33,6 +39,7 @@ type ManifestExpectation struct {
 }
 
 type Installation struct {
+	Host            string
 	ID              string
 	Version         string
 	PreviousVersion string
@@ -41,6 +48,7 @@ type Installation struct {
 }
 
 type Installed struct {
+	Host            string
 	ID              string
 	ActiveVersion   string
 	PreviousVersion string
@@ -76,6 +84,13 @@ var _ Manager = (*Service)(nil)
 func NewService(store Store) *Service { return &Service{store: store} }
 
 func (s *Service) InstallLocal(ctx context.Context, request InstallRequest) (Installation, error) {
+	request.Host = strings.TrimSpace(request.Host)
+	if request.Host == "" {
+		request.Host = "local"
+	}
+	if !validHost.MatchString(request.Host) {
+		return Installation{}, errors.New("host da tool é inválido")
+	}
 	request.ExpectedSHA256 = strings.ToLower(strings.TrimSpace(request.ExpectedSHA256))
 	if request.ExpectedSHA256 != "" {
 		decoded, err := hex.DecodeString(request.ExpectedSHA256)

@@ -50,6 +50,15 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 		m.sourceCursor = clamp(m.sourceCursor, len(m.origins))
 		return m, nil
 
+	case managedMsg:
+		if message.err != nil {
+			m.err = message.err
+			return m, nil
+		}
+		m.managed = message.items
+		m.manageCursor = clamp(m.manageCursor, len(m.managed))
+		return m, nil
+
 	case installedMsg:
 		m.installing = ""
 		if message.err != nil {
@@ -75,6 +84,15 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 		m.loading = true
 		return m, m.reload()
 
+	case toolChangedMsg:
+		if message.err != nil {
+			m.err, m.message = message.err, ""
+			return m, nil
+		}
+		m.err, m.success, m.message = nil, true, message.message
+		m.loading = true
+		return m, m.reload()
+
 	case tea.KeyMsg:
 		return m.handleKey(message)
 	}
@@ -87,6 +105,8 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		return m.handleForm(key)
 	case m.pendingRemoval != "":
 		return m.handleRemoval(key)
+	case m.pendingUninstall != nil:
+		return m.handleUninstall(key)
 	case m.searching:
 		return m.handleSearch(key)
 	case m.installing != "":
@@ -100,8 +120,13 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 
 func (m *Model) handleBrowse(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	switch key.String() {
-	case "tab", "shift+tab":
-		m.tab, m.message, m.err = m.tab.other(), "", nil
+	case "tab":
+		m.tab, m.message, m.err = m.tab.move(1), "", nil
+		m.sheetOpen = false
+		return m, nil
+
+	case "shift+tab":
+		m.tab, m.message, m.err = m.tab.move(-1), "", nil
 		m.sheetOpen = false
 		return m, nil
 
@@ -120,12 +145,20 @@ func (m *Model) handleBrowse(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		m.sheetScroll = max(m.sheetScroll-sheetPage, 0)
 		return m, nil
 
-	case "pgdown", "shift+down", " ", "space":
+	case "pgdown", "shift+down":
 		if m.tab == tabTools {
 			m.sheetScroll += sheetPage
-			return m, nil
 		}
-		return m.toggleCurrentSource()
+		return m, nil
+
+	case " ", "space":
+		switch m.tab {
+		case tabManage:
+			return m.toggleCurrentTool()
+		case tabSources:
+			return m.toggleCurrentSource()
+		}
+		return m, nil
 
 	case "up", "k":
 		m.moveCursor(-1)
@@ -171,6 +204,18 @@ func (m *Model) handleBrowse(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		return m, m.form.focusOn(fieldRef)
 
 	case "d", "delete":
+		if m.tab == tabManage {
+			item, ok := m.currentManaged()
+			if !ok {
+				return m, nil
+			}
+			if !item.Installed {
+				return m, nil
+			}
+			copy := item
+			m.pendingUninstall = &copy
+			return m, nil
+		}
 		if m.tab != tabSources {
 			return m, nil
 		}
@@ -189,6 +234,9 @@ func (m *Model) handleBrowse(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	case "enter":
 		if m.tab == tabSources {
 			return m.toggleCurrentSource()
+		}
+		if m.tab == tabManage {
+			return m.toggleCurrentTool()
 		}
 		return m.confirmInstall()
 	}
@@ -287,9 +335,24 @@ func (m *Model) handleRemoval(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handleUninstall(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
+	switch strings.ToLower(key.String()) {
+	case "y", "s", "enter":
+		item := m.pendingUninstall
+		m.pendingUninstall = nil
+		return m, m.uninstallTool(item.Tool.ID)
+	case "n", "esc":
+		m.pendingUninstall = nil
+	}
+	return m, nil
+}
+
 func (m *Model) count() int {
 	if m.tab == tabSources {
 		return len(m.origins)
+	}
+	if m.tab == tabManage {
+		return len(m.managed)
 	}
 	return len(m.visible)
 }
@@ -298,6 +361,9 @@ func (m *Model) cursor() int {
 	if m.tab == tabSources {
 		return m.sourceCursor
 	}
+	if m.tab == tabManage {
+		return m.manageCursor
+	}
 	return m.toolCursor
 }
 
@@ -305,6 +371,10 @@ func (m *Model) setCursor(value int) {
 	value = clamp(value, m.count())
 	if m.tab == tabSources {
 		m.sourceCursor = value
+		return
+	}
+	if m.tab == tabManage {
+		m.manageCursor = value
 		return
 	}
 	if m.toolCursor != value {
@@ -324,6 +394,14 @@ func (m *Model) toggleCurrentSource() (tui.Screen, tea.Cmd) {
 	return m, m.toggleSource(origin.Name, !origin.Enabled)
 }
 
+func (m *Model) toggleCurrentTool() (tui.Screen, tea.Cmd) {
+	item, ok := m.currentManaged()
+	if !ok {
+		return m, nil
+	}
+	return m, m.toggleTool(item.Tool.ID, !item.Enabled)
+}
+
 func (m *Model) moveCursor(delta int) { m.setCursor(m.cursor() + delta) }
 
 func clamp(value, length int) int {
@@ -333,11 +411,9 @@ func clamp(value, length int) int {
 	return min(value, length-1)
 }
 
-func (t tab) other() tab {
-	if t == tabTools {
-		return tabSources
-	}
-	return tabTools
+func (t tab) move(delta int) tab {
+	count := int(tabSources) + 1
+	return tab((int(t) + delta + count) % count)
 }
 
 func confirmationDetail(listing coremarket.Listing) string {

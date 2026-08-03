@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 )
 
 type fakeToolManager struct {
@@ -27,6 +29,23 @@ type fakeMarketplace struct {
 	added    marketplace.Origin
 	removed  string
 	toggled  string
+}
+
+type fakeToolManagement struct {
+	items     []toolmanage.Item
+	removed   domain.ToolID
+	toggled   domain.ToolID
+	toggledTo bool
+}
+
+func (f *fakeToolManagement) List(context.Context) ([]toolmanage.Item, error) { return f.items, nil }
+func (f *fakeToolManagement) SetEnabled(_ context.Context, id domain.ToolID, enabled bool) error {
+	f.toggled, f.toggledTo = id, enabled
+	return nil
+}
+func (f *fakeToolManagement) Remove(_ context.Context, id domain.ToolID) (toolinstall.Removal, error) {
+	f.removed = id
+	return toolinstall.Removal{ID: string(id), RecoveryDir: "/tools/.trash/" + string(id)}, nil
 }
 
 func (f *fakeMarketplace) Catalog(context.Context) (marketplace.Catalog, error) {
@@ -70,22 +89,25 @@ func (f *fakeToolManager) Remove(context.Context, string) (toolinstall.Removal, 
 func TestComandosDeToolUsamPortaDeEntrada(t *testing.T) {
 	localPackage := t.TempDir()
 	manager := &fakeToolManager{
-		installed: []toolinstall.Installed{{ID: "token-usage", ActiveVersion: "1.1.0", PreviousVersion: "1.0.0"}},
-		install:   toolinstall.Installation{ID: "token-usage", Version: "1.1.0", Path: "/tools/token-usage/1.1.0", SHA256: "abc"},
-		removal:   toolinstall.Removal{ID: "token-usage", RecoveryDir: "/tools/.trash/token-usage"},
+		install: toolinstall.Installation{ID: "example-tool", Version: "1.1.0", Path: "/tools/example-tool/1.1.0", SHA256: "abc"},
+		removal: toolinstall.Removal{ID: "example-tool", RecoveryDir: "/tools/.trash/example-tool"},
 	}
+	tools := &fakeToolManagement{items: []toolmanage.Item{{
+		Tool:    domain.Tool{ID: "example-tool", Name: "Example Tool", Kind: domain.KindProcess},
+		Enabled: true, Installed: true, ActiveVersion: "1.1.0", PreviousVersion: "1.0.0",
+	}}}
 	market := &fakeMarketplace{list: []marketplace.Listing{{Entry: marketplace.Entry{
-		ID: "token-usage", Version: "1.1.0", Summary: "Mostra tokens.", DistributionTier: marketplace.ChannelOfficial,
+		ID: "example-tool", Version: "1.1.0", Summary: "Demonstra uma extensão.", DistributionTier: marketplace.ChannelOfficial,
 	}}}}
 	for _, command := range []toolCommand{
 		{list: true},
 		{marketplace: true},
 		{install: localPackage, checksum: strings.Repeat("a", 64)},
-		{rollback: "token-usage"},
-		{remove: "token-usage"},
+		{rollback: "example-tool"},
+		{remove: "example-tool"},
 	} {
 		var output bytes.Buffer
-		if err := runToolCommand(context.Background(), manager, market, &output, command); err != nil {
+		if err := runToolCommand(context.Background(), manager, tools, market, &output, command); err != nil {
 			t.Fatal(err)
 		}
 		if output.Len() == 0 {
@@ -98,12 +120,12 @@ func TestComandosDeToolUsamPortaDeEntrada(t *testing.T) {
 }
 
 func TestToolInstallPorIDUsaMarketplace(t *testing.T) {
-	market := &fakeMarketplace{install: toolinstall.Installation{ID: "token-usage", Version: "1.0.0", Path: "/tools/token-usage"}}
+	market := &fakeMarketplace{install: toolinstall.Installation{ID: "example-tool", Version: "1.0.0", Path: "/tools/example-tool"}}
 	var output bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &output, toolCommand{install: "token-usage"}); err != nil {
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &output, toolCommand{install: "example-tool"}); err != nil {
 		t.Fatal(err)
 	}
-	if market.id != "token-usage" || !strings.Contains(output.String(), "marketplace") {
+	if market.id != "example-tool" || !strings.Contains(output.String(), "marketplace") {
 		t.Fatalf("id=%q output=%q", market.id, output.String())
 	}
 }
@@ -115,7 +137,7 @@ func TestComandosDeOrigemGerenciamRepositoriosParalelos(t *testing.T) {
 	}}}
 
 	var listing bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &listing, toolCommand{sources: true}); err != nil {
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &listing, toolCommand{sources: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(listing.String(), "lealing\tremote\thabilitada\tembutida") {
@@ -123,7 +145,7 @@ func TestComandosDeOrigemGerenciamRepositoriosParalelos(t *testing.T) {
 	}
 
 	var added bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &added,
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &added,
 		toolCommand{sourceAdd: "https://exemplo.test/tools/index.json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +154,7 @@ func TestComandosDeOrigemGerenciamRepositoriosParalelos(t *testing.T) {
 	}
 
 	var removed bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &removed,
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &removed,
 		toolCommand{sourceRemove: "exemplo-test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +163,7 @@ func TestComandosDeOrigemGerenciamRepositoriosParalelos(t *testing.T) {
 	}
 
 	var toggled bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &toggled,
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &toggled,
 		toolCommand{sourceDisable: "lealing"}); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +175,7 @@ func TestComandosDeOrigemGerenciamRepositoriosParalelos(t *testing.T) {
 func TestListagemDoMarketplaceAvisaSobreOrigemForaDoAr(t *testing.T) {
 	market := &fakeMarketplace{
 		list: []marketplace.Listing{{Entry: marketplace.Entry{
-			ID: "token-usage", Version: "1.1.0", Summary: "Mostra tokens.",
+			ID: "example-tool", Version: "1.1.0", Summary: "Demonstra uma extensão.",
 			DistributionTier: marketplace.ChannelOfficial,
 			Origin:           marketplace.Origin{Name: "lealing"},
 		}}},
@@ -162,13 +184,13 @@ func TestListagemDoMarketplaceAvisaSobreOrigemForaDoAr(t *testing.T) {
 		}},
 	}
 	var output bytes.Buffer
-	if err := runToolCommand(context.Background(), &fakeToolManager{}, market, &output, toolCommand{marketplace: true}); err != nil {
+	if err := runToolCommand(context.Background(), &fakeToolManager{}, &fakeToolManagement{}, market, &output, toolCommand{marketplace: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output.String(), "aviso: origem meu-repo indisponível") {
 		t.Fatalf("aviso ausente: %q", output.String())
 	}
-	if !strings.Contains(output.String(), "lealing/token-usage") {
+	if !strings.Contains(output.String(), "lealing/example-tool") {
 		t.Fatalf("referência qualificada ausente: %q", output.String())
 	}
 }

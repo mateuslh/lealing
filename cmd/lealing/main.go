@@ -10,8 +10,10 @@ import (
 	"os"
 
 	"github.com/mateuslh/lealing/internal/bootstrap"
+	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
@@ -27,34 +29,36 @@ func main() {
 
 func run() error {
 	var (
-		debug      = flag.Bool("debug", false, "log em arquivo e validação estrita do catálogo")
-		ephemeral  = flag.Bool("ephemeral", false, "não persiste favoritos nem estatísticas")
-		showVer    = flag.Bool("version", false, "mostra a versão e sai")
-		platforms  = flag.Bool("platforms", false, "mostra em quais sistemas cada tool roda e sai")
-		update     = flag.Bool("update", false, "atualiza o lealing pela linha de comando e sai")
-		listTools  = flag.Bool("tools", false, "lista as tools externas instaladas e sai")
-		market     = flag.Bool("marketplace", false, "lista as tools disponíveis no marketplace e sai")
-		marketURL  = flag.String("marketplace-url", bootstrap.DefaultMarketplaceURL, "URL HTTPS do índice oficial do marketplace")
-		sources    = flag.Bool("sources", false, "lista os repositórios de tools cadastrados e sai")
-		sourceAdd  = flag.String("source-add", "", "cadastra um repositório de tools: URL HTTPS do índice ou caminho absoluto local")
-		sourceName = flag.String("source-name", "", "nome do repositório usado com -source-add; vazio deriva do endereço")
-		sourceDrop = flag.String("source-remove", "", "remove um repositório de tools pelo nome")
-		sourceOn   = flag.String("source-enable", "", "habilita um repositório de tools pelo nome")
-		sourceOff  = flag.String("source-disable", "", "desabilita um repositório sem descartar o cadastro")
-		install    = flag.String("tool-install", "", "instala pelo ID do marketplace ou por um diretório local")
-		updateTool = flag.String("tool-update", "", "atualiza pelo ID do marketplace ou por um diretório local")
-		checksum   = flag.String("tool-checksum", "", "SHA-256 esperado para -tool-install")
-		remove     = flag.String("tool-remove", "", "remove uma tool instalada, preservando-a para recuperação")
-		rollback   = flag.String("tool-rollback", "", "troca a tool pela versão anterior instalada")
-		validate   = flag.String("tool-validate", "", "valida um manifest ou diretório de tool sem executar o binário")
-		login      = flag.Bool("login", false, "conecta a conta do GitHub pelo device flow e sai")
-		logout     = flag.Bool("logout", false, "desconecta a conta do GitHub desta máquina e sai")
-		syncPush   = flag.Bool("sync-push", false, "envia as preferências desta máquina e sai")
-		syncPull   = flag.Bool("sync-pull", false, "baixa as preferências do repositório e sai")
-		syncStatus = flag.Bool("sync", false, "mostra o estado da sincronização e sai")
-		syncForce  = flag.Bool("force", false, "com -sync-push/-sync-pull, sobrescreve o outro lado")
-		render     = flag.String("render", "", "imprime um frame estático no tamanho LxA (ex.: 140x42) e sai")
-		keys       = flag.String("keys", "", "teclas aplicadas antes do -render (ex.: \"/git[down]\")")
+		debug       = flag.Bool("debug", false, "log em arquivo e validação estrita do catálogo")
+		ephemeral   = flag.Bool("ephemeral", false, "não persiste favoritos nem estatísticas")
+		showVer     = flag.Bool("version", false, "mostra a versão e sai")
+		platforms   = flag.Bool("platforms", false, "mostra em quais sistemas cada tool roda e sai")
+		update      = flag.Bool("update", false, "atualiza o lealing pela linha de comando e sai")
+		listTools   = flag.Bool("tools", false, "lista todas as tools e seu estado de ativação")
+		market      = flag.Bool("marketplace", false, "lista as tools disponíveis no marketplace e sai")
+		marketURL   = flag.String("marketplace-url", bootstrap.DefaultMarketplaceURL, "URL HTTPS do índice padrão do marketplace")
+		sources     = flag.Bool("sources", false, "lista os repositórios de tools cadastrados e sai")
+		sourceAdd   = flag.String("source-add", "", "cadastra um repositório de tools: URL HTTPS do índice ou caminho absoluto local")
+		sourceName  = flag.String("source-name", "", "nome do repositório usado com -source-add; vazio deriva do endereço")
+		sourceDrop  = flag.String("source-remove", "", "remove um repositório de tools pelo nome")
+		sourceOn    = flag.String("source-enable", "", "habilita um repositório de tools pelo nome")
+		sourceOff   = flag.String("source-disable", "", "desabilita um repositório sem descartar o cadastro")
+		install     = flag.String("tool-install", "", "instala pelo ID do marketplace ou por um diretório local")
+		updateTool  = flag.String("tool-update", "", "atualiza pelo ID do marketplace ou por um diretório local")
+		checksum    = flag.String("tool-checksum", "", "SHA-256 esperado para -tool-install")
+		remove      = flag.String("tool-remove", "", "remove uma tool instalada, preservando-a para recuperação")
+		enableTool  = flag.String("tool-enable", "", "ativa uma tool instalada")
+		disableTool = flag.String("tool-disable", "", "desativa uma tool sem desinstalá-la")
+		rollback    = flag.String("tool-rollback", "", "troca a tool pela versão anterior instalada")
+		validate    = flag.String("tool-validate", "", "valida um manifest ou diretório de tool sem executar o binário")
+		login       = flag.Bool("login", false, "conecta a conta do GitHub pelo device flow e sai")
+		logout      = flag.Bool("logout", false, "desconecta a conta do GitHub desta máquina e sai")
+		syncPush    = flag.Bool("sync-push", false, "envia as preferências desta máquina e sai")
+		syncPull    = flag.Bool("sync-pull", false, "baixa as preferências do repositório e sai")
+		syncStatus  = flag.Bool("sync", false, "mostra o estado da sincronização e sai")
+		syncForce   = flag.Bool("force", false, "com -sync-push/-sync-pull, sobrescreve o outro lado")
+		render      = flag.String("render", "", "imprime um frame estático no tamanho LxA (ex.: 140x42) e sai")
+		keys        = flag.String("keys", "", "teclas aplicadas antes do -render (ex.: \"/git[down]\")")
 	)
 	flag.Parse()
 
@@ -72,9 +76,8 @@ func run() error {
 		return nil
 	}
 
-	// A mesma tool "Atualizar o lealing", sem a TUI: é o caminho de quem
-	// instalou o binário numa máquina remota e está num terminal sem
-	// interface — ou de um cron que quer manter a ferramenta em dia.
+	// A atualização é uma capacidade administrativa da engine: funciona
+	// também numa máquina remota sem TUI ou em um cron.
 	if *update {
 		return bootstrap.SelfUpdate(context.Background(), version, os.Stdout)
 	}
@@ -104,7 +107,7 @@ func run() error {
 
 	toolCommands := 0
 	for _, selected := range []bool{
-		*listTools, *market, *install != "", *updateTool != "", *remove != "", *rollback != "", *validate != "",
+		*listTools, *market, *install != "", *updateTool != "", *remove != "", *enableTool != "", *disableTool != "", *rollback != "", *validate != "",
 		*sources, *sourceAdd != "", *sourceDrop != "", *sourceOn != "", *sourceOff != "",
 	} {
 		if selected {
@@ -130,9 +133,9 @@ func run() error {
 		if source == "" {
 			source = *updateTool
 		}
-		return runToolCommand(context.Background(), bootstrap.ToolManager(), bootstrap.MarketplaceManager(version, *marketURL), os.Stdout, toolCommand{
+		return runToolCommand(context.Background(), bootstrap.ToolManager(), bootstrap.ToolManagement(), bootstrap.MarketplaceManager(version, *marketURL), os.Stdout, toolCommand{
 			list: *listTools, marketplace: *market, install: source, checksum: *checksum,
-			remove: *remove, rollback: *rollback,
+			remove: *remove, enable: *enableTool, disable: *disableTool, rollback: *rollback,
 			sources: *sources, sourceAdd: *sourceAdd, sourceName: *sourceName,
 			sourceRemove: *sourceDrop, sourceEnable: *sourceOn, sourceDisable: *sourceOff,
 		})
@@ -171,6 +174,7 @@ type toolCommand struct {
 	list, marketplace bool
 	install, checksum string
 	remove, rollback  string
+	enable, disable   string
 
 	sources               bool
 	sourceAdd, sourceName string
@@ -181,27 +185,33 @@ type toolCommand struct {
 
 func runToolCommand(
 	ctx context.Context,
-	manager toolinstall.Manager,
+	installer toolinstall.Manager,
+	tools toolmanage.Manager,
 	market marketplace.Manager,
 	output io.Writer,
 	command toolCommand,
 ) error {
 	switch {
 	case command.list:
-		installed, err := manager.ListInstalled(ctx)
+		installed, err := tools.List(ctx)
 		if err != nil {
 			return err
 		}
 		if len(installed) == 0 {
-			_, err = fmt.Fprintln(output, "nenhuma tool externa instalada")
+			_, err = fmt.Fprintln(output, "nenhuma tool instalada")
 			return err
 		}
 		for _, tool := range installed {
+			state := "ativa"
+			if !tool.Enabled {
+				state = "desativada"
+			}
 			previous := ""
 			if tool.PreviousVersion != "" {
 				previous = " (anterior " + tool.PreviousVersion + ")"
 			}
-			if _, err := fmt.Fprintf(output, "%s\t%s%s\n", tool.ID, tool.ActiveVersion, previous); err != nil {
+			if _, err := fmt.Fprintf(output, "%s\t%s\t%s\t%s%s\n",
+				tool.Tool.ID, state, "externa", tool.ActiveVersion, previous); err != nil {
 				return err
 			}
 		}
@@ -312,7 +322,7 @@ func runToolCommand(
 		if statErr == nil && !info.IsDir() {
 			return fmt.Errorf("pacote local precisa ser um diretório: %s", command.install)
 		}
-		installed, err := manager.InstallLocal(ctx, toolinstall.InstallRequest{
+		installed, err := installer.InstallLocal(ctx, toolinstall.InstallRequest{
 			SourceDir: command.install, ExpectedSHA256: command.checksum,
 		})
 		if err != nil {
@@ -323,7 +333,7 @@ func runToolCommand(
 		return err
 
 	case command.rollback != "":
-		installed, err := manager.Rollback(ctx, command.rollback)
+		installed, err := installer.Rollback(ctx, command.rollback)
 		if err != nil {
 			return err
 		}
@@ -332,11 +342,26 @@ func runToolCommand(
 		return err
 
 	case command.remove != "":
-		removed, err := manager.Remove(ctx, command.remove)
+		removed, err := tools.Remove(ctx, domain.ToolID(command.remove))
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(output, "%s removida; recuperação em %s\n", removed.ID, removed.RecoveryDir)
+		return err
+
+	case command.enable != "", command.disable != "":
+		id, enabled := command.enable, true
+		if id == "" {
+			id, enabled = command.disable, false
+		}
+		if err := tools.SetEnabled(ctx, domain.ToolID(id), enabled); err != nil {
+			return err
+		}
+		state := "ativada"
+		if !enabled {
+			state = "desativada"
+		}
+		_, err := fmt.Fprintf(output, "%s %s\n", id, state)
 		return err
 	}
 	return nil

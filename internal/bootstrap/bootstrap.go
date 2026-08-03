@@ -15,37 +15,21 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
-	accountsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/ccaccount"
-	devkitscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/devkit"
-	gitinsightscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
-	powerscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/power"
-	repoclonescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/repoclone"
 	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
-	sysinfoscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/sysinfo"
-	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
-	usersyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/usersync"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/claudecli"
-	devkitadapter "github.com/mateuslh/lealing/internal/adapter/outbound/devkit"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/externalcatalog"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/gitinsight"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/persistence"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/pluginprocess"
-	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/requirements"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/search"
-	"github.com/mateuslh/lealing/internal/catalog"
-	"github.com/mateuslh/lealing/internal/core/ccaccount"
-	"github.com/mateuslh/lealing/internal/core/devkit"
-	"github.com/mateuslh/lealing/internal/core/domain"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/toolstate"
 	"github.com/mateuslh/lealing/internal/core/hostaction"
 	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/service"
 	"github.com/mateuslh/lealing/internal/core/settings"
-	"github.com/mateuslh/lealing/internal/core/usersync"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/sdk/protocol"
 )
@@ -117,21 +101,7 @@ func Wire(opts Options) (*App, error) {
 	// O catálogo é o mesmo em toda plataforma; o filtro é que decide o que
 	// esta máquina enxerga. Manter a declaração única evita que a lista de
 	// tools se bifurque por sistema operacional.
-	providers := catalog.Providers()
-	externalTools := externalcatalog.New(externalcatalog.Options{
-		Root:       directories.Tools,
-		Categories: catalog.Categories(),
-		Reserved:   catalog.ReservedIDs(),
-		Target:     currentToolTarget(),
-		Strict:     opts.Debug,
-		Logger:     log,
-	})
-	providers = append(providers, externalTools)
-	repo := registry.New(providers,
-		registry.WithLogger(log),
-		registry.WithStrict(opts.Debug),
-		registry.WithPlatform(platform),
-	)
+	repo := newToolRepository(directories, platform, opts.Debug, log)
 
 	var usageStore outbound.UsageStore
 	if opts.Ephemeral {
@@ -154,9 +124,15 @@ func Wire(opts Options) (*App, error) {
 	// --- Core ---
 	// O Searcher cuida apenas da relevância textual; o serviço combina uso,
 	// favoritos e recência. Assim o grafo permanece acíclico.
-	catalogSvc := service.NewCatalog(repo, search.NewFuzzy(), usageStore, clock)
-	prerequisites := service.NewPrerequisites(repo, requirements.NewPathChecker())
 	toolManager := newToolManager(directories.Tools)
+	toolManagement := toolmanage.NewService(
+		repo,
+		toolstate.New(filepath.Join(directories.Config, ToolStateFileName)),
+		toolManager,
+		repo,
+	)
+	catalogSvc := service.NewCatalog(toolManagement, search.NewFuzzy(), usageStore, clock)
+	prerequisites := service.NewPrerequisites(toolManagement, requirements.NewPathChecker())
 	// A flag continua vencendo a configuração: quem passou -marketplace-url
 	// está testando outro registry agora, e o valor gravado é a preferência
 	// de sempre.
@@ -168,22 +144,11 @@ func Wire(opts Options) (*App, error) {
 		opts.Version, indexURL, toolManager, repo, directories,
 	)
 
-	// A sincronização fica de fora da sessão efêmera: ela existe para
-	// persistir preferências, e persistir na nuvem o que o usuário pediu para
-	// não persistir em disco seria contrariar a própria flag.
-	var syncSvc usersync.Manager
-	if !opts.Ephemeral {
-		syncSvc = newSyncManager(opts.Version, directories, config,
-			usageStore, marketplaceSourceStore(directories), toolManager)
-	}
-
 	var toolRunners []outbound.ToolRunner
-	launcher := service.NewLauncher(repo, catalogSvc, clock, log, toolRunners...)
+	launcher := service.NewLauncher(toolManagement, catalogSvc, clock, log, toolRunners...)
 
-	// --- Telas das tools nativas ---
-	// Cada entrada liga uma tool do catálogo à tela que a implementa. As
-	// dependências de sistema (pmset, sysctl, logs das CLIs) entram aqui e
-	// em nenhum outro lugar: as telas só conhecem as portas.
+	// A engine não registra factories por tool. Toda interface instalável
+	// entra pela tela genérica screen-v1.
 	th := theme.Default()
 	deps := tui.Deps{Theme: th}
 
@@ -191,7 +156,7 @@ func Wire(opts Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	native := adaptersFor(platform, clock.Now, userHome)
+	native := adaptersFor(platform)
 	capabilities := []string{
 		interactive.CapabilityNavigationBack,
 		interactive.CapabilityNotificationShow,
@@ -203,7 +168,7 @@ func Wire(opts Options) (*App, error) {
 			interactive.CapabilityBrowserOpen,
 		)
 	}
-	interactiveTools := interactive.NewService(repo, processRuntime, interactive.ServiceConfig{
+	interactiveTools := interactive.NewService(toolManagement, processRuntime, interactive.ServiceConfig{
 		EngineVersion: opts.Version,
 		Platform:      currentToolTarget().OS,
 		Architecture:  currentToolTarget().Arch,
@@ -213,55 +178,8 @@ func Wire(opts Options) (*App, error) {
 		Capabilities:  capabilities,
 	})
 	hostActions := hostaction.NewService(native.host)
-	gitScanner := gitinsight.New(filepath.Join(userHome, "dev"), clock.Now)
-	engineeringRunner := devkitadapter.New()
 
-	// O cofre e o índice das contas do Claude Code: o backup do ~/.claude.json
-	// e o índice dos perfis vivem no diretório de dados do lealing; as
-	// credenciais, no cofre que cada sistema oferece.
-	accounts := ccaccount.NewManager(
-		claudecli.NewVault(claudecli.CredentialsPath(userHome)),
-		claudecli.NewConfigFile(
-			claudecli.ConfigPath(userHome),
-			filepath.Join(directories.Data, "claude-json.backup"),
-		),
-		claudecli.NewStore(filepath.Join(directories.Data, "claude-accounts.json")),
-		clock.Now,
-	)
-
-	// As tools nativas abaixo continuam ligadas individualmente. Tools
-	// screen-v1 são reconhecidas pelo runtime do item do catálogo e abertas
-	// pela factory genérica da home, sem uma entrada por ID neste mapa.
-	screens := tui.Screens{
-		"claude-accounts": func() tui.Screen { return accountsscreen.New(deps, accounts, clock.Now) },
-		"self-update": func() tui.Screen {
-			return updatescreen.New(deps, Updater(opts.Version), userHome, clock.Now)
-		},
-		"git-dev-radar": func() tui.Screen { return gitinsightscreen.New(deps, gitScanner) },
-		"account-sync": func() tui.Screen {
-			return usersyncscreen.New(deps, syncSvc, hostActions, clock.Now)
-		},
-	}
-	for _, definition := range devkit.Definitions() {
-		definition := definition
-		screens[domain.ToolID(definition.ToolID)] = func() tui.Screen {
-			return devkitscreen.New(deps, engineeringRunner, definition)
-		}
-	}
-	if native.inspector != nil {
-		screens["system-info"] = func() tui.Screen {
-			return sysinfoscreen.New(deps, native.inspector, clock.Now)
-		}
-	}
-	if native.power != nil {
-		screens["power-control"] = func() tui.Screen { return powerscreen.New(deps, native.power) }
-	}
-	if native.repoClone != nil {
-		screens["clone-repo-bradesco"] = func() tui.Screen {
-			return repoclonescreen.New(deps, native.repoClone)
-		}
-	}
-	if err := validateWiring(context.Background(), repo, screens, toolRunners); err != nil {
+	if err := validateWiring(context.Background(), repo, toolRunners); err != nil {
 		return nil, err
 	}
 
@@ -274,7 +192,6 @@ func Wire(opts Options) (*App, error) {
 		Prerequisites: prerequisites,
 		Now:           clock.Now,
 		User:          userNameFor(platform),
-		Screens:       screens,
 		Interactive:   interactiveTools,
 		HostActions:   hostActions,
 		Marketplace:   marketplaceSvc,
@@ -286,8 +203,10 @@ func Wire(opts Options) (*App, error) {
 		},
 		// A loja não entra em `screens`: ela não é uma tool do catálogo, e sim
 		// a porta por onde as tools chegam. A home a abre pela vitrine.
-		MarketplaceScreen: func() tui.Screen { return marketplacescreen.New(deps, marketplaceSvc) },
-		SettingsScreen:    func() tui.Screen { return settingsscreen.New(deps, config) },
+		MarketplaceScreen: func() tui.Screen {
+			return marketplacescreen.New(deps, marketplaceSvc, toolManagement)
+		},
+		SettingsScreen: func() tui.Screen { return settingsscreen.New(deps, config) },
 	})
 
 	app.ui = tui.NewApp(th, root)

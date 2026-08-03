@@ -52,7 +52,6 @@ type Model struct {
 	launch      inbound.Launcher
 	prereqs     inbound.Prerequisites
 	now         func() time.Time
-	screens     tui.Screens
 	interactive interactive.Opener
 	hostActions hostaction.Actions
 	marketplace coremarket.Manager
@@ -144,9 +143,6 @@ type Config struct {
 	Now           func() time.Time
 	// User é o rótulo já resolvido pelo composition root para a saudação.
 	User string
-	// Screens são as tools com tela própria dentro da TUI. As demais caem
-	// no Launcher.
-	Screens tui.Screens
 	// Interactive abre qualquer manifest screen-v1 pela mesma tela genérica.
 	Interactive interactive.Opener
 	HostActions hostaction.Actions
@@ -184,7 +180,6 @@ func New(cfg Config) *Model {
 		launch:             cfg.Launcher,
 		prereqs:            cfg.Prerequisites,
 		now:                now,
-		screens:            cfg.Screens,
 		interactive:        cfg.Interactive,
 		hostActions:        cfg.HostActions,
 		marketplace:        cfg.Marketplace,
@@ -433,9 +428,8 @@ func (m *Model) toggleFavorite(id domain.ToolID) tea.Cmd {
 
 // openTool decide o que "executar" significa para esta tool.
 //
-// Tools com tela própria abrem dentro da TUI; as demais vão para o Launcher,
-// que as executa como processo. Quem aperta enter não precisa saber a
-// diferença.
+// Manifests screen-v1 abrem pela tela genérica; as demais execuções vão para
+// o Launcher. Quem aperta Enter não precisa conhecer o runtime declarado.
 func (m *Model) openTool(t domain.Tool) tea.Cmd {
 	if len(t.Requirements) > 0 {
 		return m.checkRequirements(t)
@@ -470,10 +464,6 @@ func (m *Model) checkRequirements(t domain.Tool) tea.Cmd {
 
 // openReady inicia uma tool cujos pré-requisitos já foram satisfeitos.
 func (m *Model) openReady(t domain.Tool, confirmed bool) tea.Cmd {
-	if screen, ok := m.screens.Open(t.ID); ok {
-		// Abrir conta como uso: é o que alimenta "recentes" e as sugestões.
-		return tea.Batch(tui.Navigate(screen), m.recordOpen(t.ID))
-	}
 	if t.Interactive() {
 		screen := pluginscreen.New(m.deps, m.interactive, m.hostActions, t)
 		return tea.Batch(tui.Navigate(screen), m.recordOpen(t.ID))
@@ -481,12 +471,8 @@ func (m *Model) openReady(t domain.Tool, confirmed bool) tea.Cmd {
 	return m.launchTool(t, confirmed)
 }
 
-// recordOpen contabiliza a abertura de uma tool com tela própria.
-//
-// Vai direto a Preferences, e não ao Launcher: a tool nativa não tem runner
-// que a atenda — é a TUI que a "executa", desenhando-a —, e pedir um Launch
-// só para marcar o uso devolvia ErrToolNotFound e deixava "recentes" vazio
-// para sempre.
+// recordOpen contabiliza a abertura de uma sessão interativa. Ela não passa
+// pelo Launcher comum, por isso o registro é feito diretamente em Preferences.
 //
 // A confirmação chega depois de a tela já estar empilhada, então o Router a
 // entrega à tool, não à home. É deliberado: a navegação não pode esperar o

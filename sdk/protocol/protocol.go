@@ -160,6 +160,7 @@ type Initialize struct {
 	Architecture  string       `json:"architecture"`
 	Frame         Frame        `json:"frame"`
 	Theme         Theme        `json:"theme"`
+	HomeDir       string       `json:"homeDir,omitempty"`
 	DataDir       string       `json:"dataDir"`
 	CacheDir      string       `json:"cacheDir"`
 	Capabilities  []string     `json:"capabilities,omitempty"`

@@ -51,4 +51,7 @@ func TestServiceEntregaSomenteCapabilitiesEPathsConcedidos(t *testing.T) {
 	if runtime.options.DataDir != filepath.Join("/data", "demo") || runtime.options.CacheDir != filepath.Join("/cache", "demo") {
 		t.Fatalf("diretórios = %s / %s", runtime.options.DataDir, runtime.options.CacheDir)
 	}
+	if runtime.options.HomeDir != "/users/teste" {
+		t.Fatalf("home = %q", runtime.options.HomeDir)
+	}
 }

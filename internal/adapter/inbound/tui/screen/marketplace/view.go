@@ -11,6 +11,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/component"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 )
 
 // Pontos de quebra do layout. Cada um marca a largura ou a altura abaixo da
@@ -69,6 +70,8 @@ func (m *Model) View(frame tui.Frame) string {
 		return component.Overlay(content, m.viewForm(th, min(inner, 68)), frame.Width, frame.Height)
 	case m.pendingRemoval != "":
 		return component.Overlay(content, m.viewRemoval(th, min(inner, 60)), frame.Width, frame.Height)
+	case m.pendingUninstall != nil:
+		return component.Overlay(content, m.viewUninstall(th, min(inner, 68)), frame.Width, frame.Height)
 	}
 	return content
 }
@@ -78,6 +81,7 @@ func (m *Model) View(frame tui.Frame) string {
 func (m *Model) viewTabs(th *theme.Theme, width int) string {
 	tabs := []string{
 		m.viewTab(th, tabTools, "✦", "tools", len(m.visible)),
+		m.viewTab(th, tabManage, "◫", "gerenciar", len(m.managed)),
 		m.viewTab(th, tabSources, "⇄", "origens", len(m.origins)),
 	}
 	left := strings.Join(tabs, th.Ghost.Render("   "))
@@ -129,6 +133,9 @@ func (m *Model) viewBody(th *theme.Theme, width, height int) string {
 	}
 	if m.tab == tabSources {
 		return m.viewSplit(th, width, height, m.viewSourceList, m.viewSourceDetail)
+	}
+	if m.tab == tabManage {
+		return m.viewSplit(th, width, height, m.viewManagedList, m.viewManagedDetail)
 	}
 	if m.err != nil && len(m.catalog.Tools) == 0 {
 		return component.Center(width, height,
@@ -365,6 +372,97 @@ func (m *Model) toolBadges(th *theme.Theme, listing coremarket.Listing, width in
 	return component.TruncateTail(strings.Join([]string{channel, risk, state}, " "), width)
 }
 
+// --- Gerenciamento ----------------------------------------------------
+
+func (m *Model) viewManagedList(th *theme.Theme, width, height int) string {
+	if len(m.managed) == 0 {
+		return component.Panel{
+			Title: "gerenciar", Glyph: "◫", Accent: th.Muted, Width: width, Height: height,
+		}.Render(th, component.Center(width-2, height-2, th.Ghost.Render("nenhuma tool nesta plataforma")))
+	}
+	inner, rows := width-2, height-2
+	perItem := 1
+	if rows >= 6 {
+		perItem = itemRows
+	}
+	visibleItems := max(rows/perItem, 1)
+	start := scrollStart(m.manageCursor, visibleItems, len(m.managed))
+	lines := make([]string, 0, rows)
+	for index := start; index < min(start+visibleItems, len(m.managed)); index++ {
+		lines = append(lines, m.viewManagedItem(th, m.managed[index], index == m.manageCursor, inner, perItem)...)
+	}
+	return component.Panel{
+		Title: "gerenciar", Glyph: "◫", Accent: th.Accent, Focused: true,
+		Footer: "espaço ativar · d desinstalar", Width: width, Height: height,
+	}.Render(th, strings.Join(lines, "\n"))
+}
+
+func (m *Model) viewManagedItem(th *theme.Theme, item toolmanage.Item, selected bool, width, rows int) []string {
+	caret, name := "  ", th.Item.Render(item.Tool.Title())
+	if selected {
+		caret = lipgloss.NewStyle().Foreground(th.Accent).Render("▎") + " "
+		name = th.ItemSelected.Render(item.Tool.Title())
+	}
+	marker, tone, state := "○", th.Faint, th.Ghost.Render("desativada")
+	if item.Enabled {
+		marker, tone, state = "●", th.Success, lipgloss.NewStyle().Foreground(th.Success).Render("ativa")
+	}
+	head := component.Spread(caret+lipgloss.NewStyle().Foreground(tone).Render(marker)+" "+name, state, width)
+	lines := []string{component.TruncateTail(head, width)}
+	if rows < itemRows {
+		return lines
+	}
+	scope := "externa · " + item.ActiveVersion
+	lines = append(lines, component.TruncateTail("    "+th.Ghost.Render(scope+" · "+string(item.Tool.ID)), width))
+	return lines
+}
+
+func (m *Model) viewManagedDetail(th *theme.Theme, width, height int) string {
+	item, ok := m.currentManaged()
+	if !ok {
+		return component.Panel{
+			Title: "tool", Glyph: "◆", Accent: th.Muted, Width: width, Height: height,
+		}.Render(th, "")
+	}
+	inner := width - 2
+	state, tone := "ativa", th.Success
+	if !item.Enabled {
+		state, tone = "desativada", th.Faint
+	}
+	scope := "instalada externamente"
+	rows := []component.Row{
+		{Label: "estado", Value: state, Tone: tone},
+		{Label: "tipo", Value: scope},
+		{Label: "ID", Value: string(item.Tool.ID)},
+		{Label: "risco", Value: item.Tool.Risk.String(), Tone: riskColor(th, item.Tool.Risk.String())},
+	}
+	if item.Installed {
+		rows = append(rows, component.Row{Label: "versão", Value: item.ActiveVersion})
+		if item.PreviousVersion != "" {
+			rows = append(rows, component.Row{Label: "anterior", Value: item.PreviousVersion})
+		}
+	}
+	description := strings.TrimSpace(item.Tool.Summary)
+	if description == "" {
+		description = "A instalação existe, mas seu manifest não pôde entrar no catálogo. Ela ainda pode ser desinstalada daqui."
+	}
+	blocks := []string{
+		th.Strong.Render(component.TruncateTail(toolGlyph(item.Tool.Glyph)+"  "+item.Tool.Title(), inner)),
+		"",
+		wrap(th.ItemDesc, description, inner, 5),
+		"",
+		component.FieldList{Rows: rows, Width: inner, LabelWidth: 12}.Render(th),
+	}
+	footer := "espaço ativar/desativar"
+	if item.Installed {
+		footer += " · d desinstalar"
+	}
+	return component.Panel{
+		Title: "tool", Glyph: "◆", Accent: th.Accent,
+		Footer: footer, Width: width, Height: height,
+	}.Render(th, strings.Join(blocks, "\n"))
+}
+
 // --- Origens -----------------------------------------------------------
 
 func (m *Model) viewSourceList(th *theme.Theme, width, height int) string {
@@ -551,6 +649,21 @@ func (m *Model) viewRemoval(th *theme.Theme, width int) string {
 	}.Render(th, content)
 }
 
+func (m *Model) viewUninstall(th *theme.Theme, width int) string {
+	inner := width - 2
+	item := m.pendingUninstall
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		th.Strong.Render(component.TruncateTail("Desinstalar "+item.Tool.Title()+"?", inner)),
+		"",
+		th.Dim.Render(component.TruncateTail(
+			"O pacote sai do catálogo e é movido para .trash; a mensagem final informa o caminho de recuperação.", inner)),
+	)
+	return component.Panel{
+		Title: "confirmar", Glyph: "!", Accent: th.Warning, Focused: true,
+		Footer: "y desinstalar · n cancelar", Width: width, Height: lipgloss.Height(content) + 2,
+	}.Render(th, content)
+}
+
 // viewFeedback devolve a última mensagem da tela, já colorida pelo tom.
 func (m *Model) viewFeedback(th *theme.Theme, width int) string {
 	switch {
@@ -575,6 +688,8 @@ func (m *Model) Hints() []tui.Hint {
 		return []tui.Hint{{Key: "↵", Label: "cadastrar"}, {Key: "↹", Label: "campo"}, {Key: "esc", Label: "cancelar"}}
 	case m.pendingRemoval != "":
 		return []tui.Hint{{Key: "y", Label: "remover"}, {Key: "n", Label: "cancelar"}}
+	case m.pendingUninstall != nil:
+		return []tui.Hint{{Key: "y", Label: "desinstalar"}, {Key: "n", Label: "cancelar"}}
 	case m.searching:
 		return []tui.Hint{{Key: "↵", Label: "aplicar"}, {Key: "esc", Label: "limpar"}}
 	case m.sheetOpen:
@@ -587,6 +702,12 @@ func (m *Model) Hints() []tui.Hint {
 			{Key: "↑↓", Label: "selecionar"}, {Key: "espaço", Label: "ligar/desligar"},
 			{Key: "a", Label: "adicionar"}, {Key: "d", Label: "remover"},
 			{Key: "↹", Label: "tools"}, {Key: "r", Label: "recarregar"}, {Key: "esc", Label: "voltar"},
+		}
+	case m.tab == tabManage:
+		return []tui.Hint{
+			{Key: "↑↓", Label: "selecionar"}, {Key: "espaço", Label: "ativar/desativar"},
+			{Key: "d", Label: "desinstalar externa"}, {Key: "↹", Label: "abas"},
+			{Key: "r", Label: "recarregar"}, {Key: "esc", Label: "voltar"},
 		}
 	}
 	return []tui.Hint{
@@ -602,6 +723,9 @@ func (m *Model) Meta() []string {
 	meta := []string{plural(len(m.origins), "origem", "origens")}
 	if tool, ok := m.currentTool(); ok && m.tab == tabTools {
 		meta = append(meta, string(tool.DistributionTier), tool.Version)
+	}
+	if _, ok := m.currentManaged(); ok && m.tab == tabManage {
+		meta = append(meta, "externa")
 	}
 	return meta
 }
@@ -620,8 +744,9 @@ func (m *Model) Status() (string, lipgloss.TerminalColor) {
 			plural(len(m.catalog.Tools), "tool", "tools"),
 			plural(m.failedSources(), "origem", "origens")), th.Warning
 	default:
-		return fmt.Sprintf("%s em %s",
-			plural(len(m.catalog.Tools), "tool", "tools"),
+		return fmt.Sprintf("%s ativas · %s gerenciáveis em %s",
+			plural(activeManaged(m.managed), "tool", "tools"),
+			plural(len(m.managed), "tool", "tools"),
 			plural(len(m.origins), "origem", "origens")), th.Success
 	}
 }
@@ -644,6 +769,16 @@ func (m *Model) failedSources() int {
 		}
 	}
 	return failed
+}
+
+func activeManaged(items []toolmanage.Item) int {
+	active := 0
+	for _, item := range items {
+		if item.Enabled {
+			active++
+		}
+	}
+	return active
 }
 
 func (m *Model) emptyToolsMessage() string {

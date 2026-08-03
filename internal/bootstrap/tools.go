@@ -7,15 +7,20 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mateuslh/lealing/internal/adapter/outbound/externalcatalog"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/marketplacefile"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/marketplacehttp"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/marketplacesources"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/registry"
+	"github.com/mateuslh/lealing/internal/adapter/outbound/toolstate"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/toolstore"
 	"github.com/mateuslh/lealing/internal/catalog"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
+	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/internal/platform/xdg"
 	"github.com/mateuslh/lealing/internal/toolmanifest"
 	"github.com/mateuslh/lealing/sdk/protocol"
@@ -26,12 +31,16 @@ import (
 // imutáveis e a engine escolhe a versão compatível mais recente.
 const DefaultMarketplaceURL = "https://raw.githubusercontent.com/mateuslh/lealing-tools/main/marketplace/index.json"
 
-// OfficialSourceName é o nome da origem embutida. Fixo porque aparece nas
-// referências qualificadas "lealing/token-usage" e no arquivo de origens.
-const OfficialSourceName = "lealing"
+// DefaultSourceName é o nome da origem padrão. Fixo porque aparece nas
+// referências qualificadas "lealing/example-tool" e no arquivo de origens.
+const DefaultSourceName = "lealing"
 
 // SourcesFileName guarda os repositórios de tools adicionados pelo usuário.
 const SourcesFileName = "marketplace-sources.json"
+
+// ToolStateFileName guarda as referências qualificadas desativadas. Vincular
+// ID e host impede que outro provider com o mesmo ID herde a preferência.
+const ToolStateFileName = "tool-state.json"
 
 // marketplaceSourceStore abre o arquivo de origens. O marketplace e a
 // sincronização leem o mesmo disco; a escrita atômica é o que os mantém
@@ -79,8 +88,8 @@ func builtinSources(indexURL string) []marketplace.Origin {
 		indexURL = DefaultMarketplaceURL
 	}
 	return []marketplace.Origin{{
-		Name:    OfficialSourceName,
-		Label:   "índice oficial",
+		Name:    DefaultSourceName,
+		Label:   "índice padrão",
 		Kind:    marketplace.OriginRemote,
 		Ref:     indexURL,
 		Trusted: true,
@@ -101,6 +110,45 @@ func ToolManager() toolinstall.Manager {
 func newToolManager(root string) toolinstall.Manager {
 	store := toolstore.New(root, catalog.Categories(), currentToolTarget(), nil)
 	return toolinstall.NewService(store)
+}
+
+// ToolManagement compõe a visão completa usada pelos comandos explícitos da
+// CLI. Diferentemente da home, ela continua listando IDs desativados.
+func ToolManagement() toolmanage.Manager {
+	platform := currentPlatform()
+	directories := directoriesFor(platform)
+	log := outbound.Logger(logging.NewDiscard())
+	repo := newToolRepository(directories, platform, false, log)
+	installer := newToolManager(directories.Tools)
+	return toolmanage.NewService(
+		repo,
+		toolstate.New(filepath.Join(directories.Config, ToolStateFileName)),
+		installer,
+		repo,
+	)
+}
+
+func newToolRepository(
+	directories xdg.Directories,
+	platform domain.Platform,
+	strict bool,
+	log outbound.Logger,
+) *registry.Registry {
+	providers := catalog.Providers()
+	providers = append(providers, externalcatalog.New(externalcatalog.Options{
+		Root:        directories.Tools,
+		Categories:  catalog.Categories(),
+		Reserved:    catalog.ReservedIDs(),
+		Target:      currentToolTarget(),
+		DefaultHost: DefaultSourceName,
+		Strict:      strict,
+		Logger:      log,
+	}))
+	return registry.New(providers,
+		registry.WithLogger(log),
+		registry.WithStrict(strict),
+		registry.WithPlatform(platform),
+	)
 }
 
 // MarketplaceManager compõe o catálogo remoto para comandos da CLI. A TUI

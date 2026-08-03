@@ -127,6 +127,7 @@ func (r *Runtime) Start(ctx context.Context, tool domain.Tool, options interacti
 		Protocol: r.config.Protocol, ToolID: string(tool.ID), EngineVersion: options.EngineVersion,
 		Platform: options.Platform, Architecture: options.Architecture,
 		Frame: toProtocolFrame(options.Frame).Clamp(), Theme: toProtocolTheme(options.Theme),
+		HomeDir: options.HomeDir,
 		DataDir: options.DataDir, CacheDir: options.CacheDir,
 		Capabilities: append([]string(nil), options.Capabilities...),
 		Permissions: protocol.Permissions{

@@ -14,7 +14,8 @@ import (
 // ToolProvider é uma fonte de tools. O registry agrega N providers, o que
 // permite crescer para centenas de tools sem um arquivo monolítico.
 type ToolProvider interface {
-	// Name identifica o provider em logs e diagnósticos.
+	// Name identifica o provider em logs, diagnósticos e estado persistido.
+	// Precisa ser estável entre execuções e único dentro do composition root.
 	Name() string
 	// Provide devolve o lote de tools e categorias desta fonte.
 	Provide(ctx context.Context) ([]domain.Tool, []domain.Category, error)

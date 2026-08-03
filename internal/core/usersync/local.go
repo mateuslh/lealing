@@ -19,6 +19,7 @@ type LocalState struct {
 	usage     outbound.UsageStore
 	sources   marketplace.SourceStore
 	installed toolinstall.Manager
+	catalog   outbound.ToolRepository
 }
 
 var _ Local = (*LocalState)(nil)
@@ -27,8 +28,9 @@ func NewLocalState(
 	usage outbound.UsageStore,
 	sources marketplace.SourceStore,
 	installed toolinstall.Manager,
+	catalog outbound.ToolRepository,
 ) *LocalState {
-	return &LocalState{usage: usage, sources: sources, installed: installed}
+	return &LocalState{usage: usage, sources: sources, installed: installed, catalog: catalog}
 }
 
 func (l *LocalState) Collect(ctx context.Context) (State, error) {
@@ -45,8 +47,20 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 			if usage.Runs == 0 && !usage.Favorite {
 				continue
 			}
+			host := usage.Host
+			if host == "" && l.catalog != nil {
+				if tool, lookupErr := l.catalog.ByID(ctx, id); lookupErr == nil {
+					host = tool.Host
+				}
+			}
+			// Estado v3 nunca publica uma referência ambígua. Uma preferência
+			// legada sem tool instalada fica apenas no cache local até que a
+			// procedência possa ser resolvida novamente.
+			if host == "" {
+				continue
+			}
 			state.Usage = append(state.Usage, ToolUsage{
-				ID: string(id), Runs: usage.Runs,
+				Host: host, ID: string(id), Runs: usage.Runs,
 				LastRun: usage.LastRun.UTC(), Favorite: usage.Favorite,
 			})
 		}
@@ -72,8 +86,17 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 			return State{}, err
 		}
 		for _, tool := range stored {
+			host := tool.Host
+			if host == "" && l.catalog != nil {
+				if catalogTool, lookupErr := l.catalog.ByID(ctx, domain.ToolID(tool.ID)); lookupErr == nil {
+					host = catalogTool.Host
+				}
+			}
+			if host == "" {
+				continue
+			}
 			state.Tools = append(state.Tools, InstalledTool{
-				ID: tool.ID, Version: tool.ActiveVersion,
+				Host: host, ID: tool.ID, Version: tool.ActiveVersion,
 			})
 		}
 	}
@@ -93,8 +116,15 @@ func (l *LocalState) Apply(ctx context.Context, state State, selection Selection
 
 	if selection.Enabled(SectionUsage) && l.usage != nil {
 		for _, usage := range state.Usage {
+			// A preferência viaja mesmo quando a tool não está instalada. Se
+			// houver uma homônima ativa de outro host, ela não pode herdá-la.
+			if l.catalog != nil {
+				if tool, lookupErr := l.catalog.ByID(ctx, domain.ToolID(usage.ID)); lookupErr == nil && tool.Host != usage.Host {
+					continue
+				}
+			}
 			if err := l.usage.Save(ctx, domain.Usage{
-				ToolID: domain.ToolID(usage.ID), Runs: usage.Runs,
+				Host: usage.Host, ToolID: domain.ToolID(usage.ID), Runs: usage.Runs,
 				LastRun: usage.LastRun, Favorite: usage.Favorite,
 			}); err != nil {
 				return applied, err
@@ -146,11 +176,17 @@ func (l *LocalState) MissingTools(ctx context.Context, state State) ([]Installed
 	}
 	present := make(map[string]bool, len(stored))
 	for _, tool := range stored {
-		present[tool.ID] = true
+		host := tool.Host
+		if host == "" && l.catalog != nil {
+			if catalogTool, lookupErr := l.catalog.ByID(ctx, domain.ToolID(tool.ID)); lookupErr == nil {
+				host = catalogTool.Host
+			}
+		}
+		present[host+"\x00"+tool.ID] = true
 	}
 	missing := make([]InstalledTool, 0, len(state.Tools))
 	for _, tool := range state.Tools {
-		if !present[tool.ID] {
+		if !present[tool.Host+"\x00"+tool.ID] {
 			missing = append(missing, tool)
 		}
 	}

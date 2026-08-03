@@ -64,6 +64,8 @@ func (e *ValidationError) Unwrap() error { return ErrInvalidTool }
 // em vez de produzir uma linha vazia na lista.
 func (t Tool) Validate() error {
 	switch {
+	case strings.TrimSpace(t.Host) == "":
+		return &ValidationError{ID: t.ID, Field: "Host", Reason: "é obrigatório"}
 	case t.ID == "":
 		return &ValidationError{ID: t.ID, Field: "ID", Reason: "é obrigatório"}
 	case t.Name == "":

@@ -10,8 +10,10 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
+	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 )
 
 type fakeManager struct {
@@ -28,6 +30,23 @@ type fakeManager struct {
 	toggled     string
 	toggledTo   bool
 	mutationErr error
+}
+
+type fakeToolManagement struct {
+	items     []toolmanage.Item
+	toggled   domain.ToolID
+	toggledTo bool
+	removed   domain.ToolID
+}
+
+func (f *fakeToolManagement) List(context.Context) ([]toolmanage.Item, error) { return f.items, nil }
+func (f *fakeToolManagement) SetEnabled(_ context.Context, id domain.ToolID, enabled bool) error {
+	f.toggled, f.toggledTo = id, enabled
+	return nil
+}
+func (f *fakeToolManagement) Remove(_ context.Context, id domain.ToolID) (toolinstall.Removal, error) {
+	f.removed = id
+	return toolinstall.Removal{ID: string(id), RecoveryDir: "/tools/.trash/" + string(id)}, nil
 }
 
 func (f *fakeManager) Catalog(context.Context) (coremarket.Catalog, error) {
@@ -66,8 +85,8 @@ func (f *fakeManager) SetSourceEnabled(_ context.Context, name string, enabled b
 
 func fixture() coremarket.Listing {
 	return coremarket.Listing{Entry: coremarket.Entry{
-		ID: "token-usage", Version: "1.0.0", Name: "Uso de Tokens",
-		Summary: "Mostra consumo de tokens e custos estimados.", Publisher: "mateuslh",
+		ID: "example-tool", Version: "1.0.0", Name: "Example Tool",
+		Summary: "Demonstra uma extensão externa.", Publisher: "example",
 		DistributionTier: coremarket.ChannelOfficial, Risk: "safe", Glyph: "✧",
 		Protocol: coremarket.VersionRange{Min: 1, Max: 1},
 		Origin:   officialOrigin(),
@@ -76,7 +95,7 @@ func fixture() coremarket.Listing {
 
 func officialOrigin() coremarket.Origin {
 	return coremarket.Origin{
-		Name: "lealing", Label: "índice oficial", Kind: coremarket.OriginRemote,
+		Name: "lealing", Label: "índice padrão", Kind: coremarket.OriginRemote,
 		Ref: "https://example.test/index.json", Trusted: true, Builtin: true, Enabled: true,
 	}
 }
@@ -94,8 +113,8 @@ func testDeps() tui.Deps { return tui.Deps{Theme: theme.Default()} }
 // em que quase todo caso interessante começa.
 func loaded(t *testing.T, manager *fakeManager) *Model {
 	t.Helper()
-	model := New(testDeps(), manager)
-	for _, command := range []tea.Cmd{model.loadCatalog(), model.loadSources()} {
+	model := New(testDeps(), manager, &fakeToolManagement{})
+	for _, command := range []tea.Cmd{model.loadCatalog(), model.loadManaged(), model.loadSources()} {
 		model, _ = updateAsModel(t, model, command())
 	}
 	return model
@@ -106,7 +125,7 @@ func TestEstadosLoadingRunningEError(t *testing.T) {
 		Tools:   []coremarket.Listing{fixture()},
 		Sources: []coremarket.SourceStatus{{Origin: officialOrigin(), Tools: 1}},
 	}}
-	model := New(testDeps(), manager)
+	model := New(testDeps(), manager, &fakeToolManagement{})
 	if !strings.Contains(model.View(tui.Frame{Width: 80, Height: 20}), "consultando") {
 		t.Fatal("loading não foi renderizado")
 	}
@@ -115,7 +134,7 @@ func TestEstadosLoadingRunningEError(t *testing.T) {
 	if manager.catalogs != 1 {
 		t.Fatalf("Catalog = %d", manager.catalogs)
 	}
-	if view := model.View(tui.Frame{Width: 80, Height: 20}); !strings.Contains(view, "Uso de Tokens") {
+	if view := model.View(tui.Frame{Width: 80, Height: 20}); !strings.Contains(view, "Example Tool") {
 		t.Fatalf("catálogo não foi renderizado: %q", view)
 	}
 
@@ -144,34 +163,34 @@ func TestEnterAbreConfirmacaoGlobalSemInstalarDentroDeUpdate(t *testing.T) {
 func TestInstalacaoUsaReferenciaQualificadaERelataSucesso(t *testing.T) {
 	manager := &fakeManager{
 		catalog:      coremarket.Catalog{Tools: []coremarket.Listing{fixture()}},
-		installation: toolinstall.Installation{ID: "token-usage", Version: "1.0.0"},
+		installation: toolinstall.Installation{ID: "example-tool", Version: "1.0.0"},
 	}
 	model := loaded(t, manager)
 
 	message := model.install(model.visible[0].Ref())()
-	if manager.installedID != "lealing/token-usage" {
+	if manager.installedID != "lealing/example-tool" {
 		t.Fatalf("referência instalada = %q", manager.installedID)
 	}
 	next, command := model.Update(message)
 	view := next.View(tui.Frame{Width: 100, Height: 24})
-	if command == nil || !strings.Contains(view, "token-usage@1.0.0 instalada") {
+	if command == nil || !strings.Contains(view, "example-tool@1.0.0 instalada") {
 		t.Fatalf("sucesso não atualizou o estado nem pediu recarga: command=%v view=%q", command != nil, view)
 	}
 }
 
 func TestBuscaEFiltroRecortamOCatalogo(t *testing.T) {
 	other := fixture()
-	other.ID, other.Name, other.Summary = "git-radar", "Git Radar", "Resume repositórios locais."
+	other.ID, other.Name, other.Summary = "another-tool", "Another Tool", "Resume dados locais."
 	other.InstalledVersion = "1.0.0"
 
 	manager := &fakeManager{catalog: coremarket.Catalog{Tools: []coremarket.Listing{fixture(), other}}}
 	model := loaded(t, manager)
 
 	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	for _, symbol := range "radar" {
+	for _, symbol := range "another" {
 		model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{symbol}})
 	}
-	if len(model.visible) != 1 || model.visible[0].ID != "git-radar" {
+	if len(model.visible) != 1 || model.visible[0].ID != "another-tool" {
 		t.Fatalf("busca = %+v", model.visible)
 	}
 
@@ -186,6 +205,7 @@ func TestAbaDeOrigensLigaDesligaERemove(t *testing.T) {
 	manager := &fakeManager{origins: []coremarket.Origin{officialOrigin(), customOrigin()}}
 	model := loaded(t, manager)
 
+	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 	if model.tab != tabSources {
 		t.Fatal("tab não alternou para origens")
@@ -222,6 +242,7 @@ func TestOrigemEmbutidaNaoPodeSerRemovida(t *testing.T) {
 	manager := &fakeManager{origins: []coremarket.Origin{officialOrigin()}}
 	model := loaded(t, manager)
 	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 
 	if model.pendingRemoval != "" || manager.removed != "" {
@@ -229,6 +250,43 @@ func TestOrigemEmbutidaNaoPodeSerRemovida(t *testing.T) {
 	}
 	if !strings.Contains(model.message, "não pode ser removida") {
 		t.Fatalf("mensagem = %q", model.message)
+	}
+}
+
+func TestAbaGerenciarAtivaDesativaEDesinstalaExterna(t *testing.T) {
+	tools := &fakeToolManagement{items: []toolmanage.Item{{
+		Tool:    domain.Tool{ID: "example-tool", Name: "Example Tool", Kind: domain.KindProcess},
+		Enabled: true, Installed: true, ActiveVersion: "1.0.0",
+	}}}
+	model := New(testDeps(), &fakeManager{}, tools)
+	for _, command := range []tea.Cmd{model.loadCatalog(), model.loadManaged(), model.loadSources()} {
+		model, _ = updateAsModel(t, model, command())
+	}
+
+	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	if model.tab != tabManage || !strings.Contains(model.View(tui.Frame{Width: 100, Height: 26}), "GERENCIAR") {
+		t.Fatal("aba de gerenciamento não abriu")
+	}
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeySpace})
+	if command == nil {
+		t.Fatal("espaço não gerou a desativação")
+	}
+	command()
+	if tools.toggled != "example-tool" || tools.toggledTo {
+		t.Fatalf("toggle = %s → %v", tools.toggled, tools.toggledTo)
+	}
+
+	model, _ = updateAsModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if model.pendingUninstall == nil || !strings.Contains(model.View(tui.Frame{Width: 100, Height: 26}), "Desinstalar") {
+		t.Fatal("desinstalação não pediu confirmação")
+	}
+	_, command = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if command == nil {
+		t.Fatal("confirmação não gerou comando")
+	}
+	command()
+	if tools.removed != "example-tool" {
+		t.Fatalf("removida = %s", tools.removed)
 	}
 }
 
@@ -291,7 +349,7 @@ func TestOrigemForaDoArApareceSemEsconderAsDemais(t *testing.T) {
 	model := loaded(t, manager)
 
 	view := model.View(tui.Frame{Width: 120, Height: 30})
-	if !strings.Contains(view, "Uso de Tokens") {
+	if !strings.Contains(view, "Example Tool") {
 		t.Fatal("a tool da origem saudável sumiu por causa da que falhou")
 	}
 	if !strings.Contains(view, "indisponível") {
@@ -303,7 +361,7 @@ func TestOrigemForaDoArApareceSemEsconderAsDemais(t *testing.T) {
 }
 
 func TestHintsIncluemEsc(t *testing.T) {
-	model := New(testDeps(), &fakeManager{})
+	model := New(testDeps(), &fakeManager{}, &fakeToolManagement{})
 	for _, hint := range model.Hints() {
 		if strings.Contains(hint.Key, "esc") {
 			return
@@ -329,10 +387,10 @@ func updateAsModel(t *testing.T, model *Model, message tea.Msg) (*Model, tea.Cmd
 
 func detailed() coremarket.Listing {
 	listing := fixture()
-	listing.Detail = "Varre os logs das CLIs, normaliza o consumo relatado e estima o custo pela tabela de preços publicada."
+	listing.Detail = "Lê dados locais de exemplo, normaliza os registros e apresenta um resumo para demonstrar a ficha."
 	listing.MinimumEngine = "0.3.0"
 	listing.Permissions = coremarket.Permissions{
-		Filesystem: coremarket.FilesystemPermissions{Read: []string{"~/.claude/projects", "~/.codex/sessions"}},
+		Filesystem: coremarket.FilesystemPermissions{Read: []string{"~/.example/data", "~/.example/cache"}},
 		Network:    true,
 	}
 	listing.Artifacts = []coremarket.Artifact{
@@ -346,14 +404,14 @@ func TestFichaMostraDescricaoProcedenciaERequisitos(t *testing.T) {
 	sheet := strings.Join(model.toolSheet(model.deps.Theme, detailed(), 70), "\n")
 
 	for _, want := range []string{
-		"tabela de preços",   // descrição longa
-		"mateuslh",           // publicador
-		"official",           // canal
-		"≥ 0.3.0",            // versão mínima da engine
-		"darwin-arm64",       // plataformas com artefato
-		"~/.claude/projects", // caminho concedido, não a contagem
-		"~/.codex/sessions",  // cada caminho em sua linha
-		"—",                  // ausência de escrita
+		"dados locais de exemplo", // descrição longa
+		"example",                 // publicador
+		"official",                // canal
+		"≥ 0.3.0",                 // versão mínima da engine
+		"darwin-arm64",            // plataformas com artefato
+		"~/.example/data",         // caminho concedido, não a contagem
+		"~/.example/cache",        // cada caminho em sua linha
+		"—",                       // ausência de escrita
 	} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("a ficha não mostrou %q:\n%s", want, sheet)

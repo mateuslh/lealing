@@ -139,6 +139,7 @@ type StartOptions struct {
 	Architecture  string
 	Frame         Frame
 	Theme         Theme
+	HomeDir       string
 	DataDir       string
 	CacheDir      string
 	Capabilities  []string
@@ -204,6 +205,7 @@ func (s *Service) Open(ctx context.Context, id domain.ToolID, options OpenOption
 		EngineVersion: s.config.EngineVersion,
 		Platform:      s.config.Platform, Architecture: s.config.Architecture,
 		Frame: options.Frame, Theme: options.Theme,
+		HomeDir:      s.config.UserHome,
 		DataDir:      filepath.Join(s.config.DataRoot, string(id)),
 		CacheDir:     filepath.Join(s.config.CacheRoot, string(id)),
 		Capabilities: capabilities,

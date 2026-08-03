@@ -13,7 +13,7 @@ func TestUsageFileGravaERecarrega(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dados", "usage.json")
 	store := NewUsageFile(path, 0) // debounce zero: grava síncrono
 
-	want := domain.Usage{ToolID: "system-info", Runs: 3, Favorite: true}
+	want := domain.Usage{Host: "example-host", ToolID: "example-tool", Runs: 3, Favorite: true}
 	if err := store.Save(context.Background(), want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestUsageFileGravaERecarrega(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if u := got["system-info"]; u.Runs != want.Runs || !u.Favorite {
+	if u := got["example-tool"]; u.Host != want.Host || u.Runs != want.Runs || !u.Favorite {
 		t.Errorf("recarregado = %+v, quero runs=%d favorito", u, want.Runs)
 	}
 }

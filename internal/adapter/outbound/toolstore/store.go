@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,8 @@ type Store struct {
 	target     toolmanifest.Target
 	now        func() time.Time
 }
+
+var validID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 var _ toolinstall.Store = (*Store)(nil)
 
@@ -42,6 +45,12 @@ func New(root string, categories []domain.Category, target toolmanifest.Target, 
 func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest) (_ toolinstall.Installation, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return toolinstall.Installation{}, err
+	}
+	if request.Host == "" {
+		request.Host = "local"
+	}
+	if err := safeID(request.Host); err != nil {
+		return toolinstall.Installation{}, fmt.Errorf("host da tool: %w", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(request.SourceDir, "manifest.yaml"))
 	if err != nil {
@@ -99,6 +108,9 @@ func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest)
 	if err := copyFile(filepath.Join(temporary, "manifest.yaml"), filepath.Join(request.SourceDir, "manifest.yaml"), 0o600); err != nil {
 		return toolinstall.Installation{}, err
 	}
+	if err := os.WriteFile(filepath.Join(temporary, "host"), []byte(request.Host+"\n"), 0o600); err != nil {
+		return toolinstall.Installation{}, err
+	}
 	if err := copyFile(filepath.Join(temporary, executableName), sourceExecutable, mode.Perm()|0o500); err != nil {
 		return toolinstall.Installation{}, err
 	}
@@ -130,7 +142,7 @@ func (s *Store) Install(ctx context.Context, request toolinstall.InstallRequest)
 		return toolinstall.Installation{}, err
 	}
 	return toolinstall.Installation{
-		ID: manifest.ID, Version: manifest.Version, PreviousVersion: previous,
+		Host: request.Host, ID: manifest.ID, Version: manifest.Version, PreviousVersion: previous,
 		SHA256: checksum, Path: versionDir,
 	}, nil
 }
@@ -210,7 +222,10 @@ func (s *Store) List(ctx context.Context) ([]toolinstall.Installed, error) {
 			continue
 		}
 		previous, _ := readPointer(idDir, "previous")
-		installed = append(installed, toolinstall.Installed{ID: entry.Name(), ActiveVersion: active, PreviousVersion: previous})
+		host, _ := readHost(filepath.Join(idDir, active))
+		installed = append(installed, toolinstall.Installed{
+			Host: host, ID: entry.Name(), ActiveVersion: active, PreviousVersion: previous,
+		})
 	}
 	sort.Slice(installed, func(i, j int) bool { return installed[i].ID < installed[j].ID })
 	return installed, nil
@@ -249,7 +264,8 @@ func (s *Store) Rollback(ctx context.Context, id string) (toolinstall.Installati
 		return toolinstall.Installation{}, err
 	}
 	return toolinstall.Installation{
-		ID: id, Version: manifest.Version, PreviousVersion: active,
+		Host: installedHost(filepath.Join(idDir, previous)), ID: id,
+		Version: manifest.Version, PreviousVersion: active,
 		SHA256: checksum, Path: filepath.Join(idDir, previous),
 	}, nil
 }
@@ -367,8 +383,25 @@ func writePointer(idDir, name, value string) error {
 	return os.Rename(temporaryName, filepath.Join(idDir, name))
 }
 
+func readHost(versionDir string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(versionDir, "host"))
+	if err != nil {
+		return "", err
+	}
+	host := strings.TrimSpace(string(raw))
+	if err := safeID(host); err != nil {
+		return "", fmt.Errorf("host de instalação inválido: %w", err)
+	}
+	return host, nil
+}
+
+func installedHost(versionDir string) string {
+	host, _ := readHost(versionDir)
+	return host
+}
+
 func safeID(id string) error {
-	if id == "" || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
+	if !validID.MatchString(id) || filepath.Base(id) != id || strings.ContainsAny(id, `/\`) {
 		return errors.New("ID de tool inseguro")
 	}
 	return nil

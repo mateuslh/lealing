@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
@@ -133,8 +134,8 @@ func TestWriteEDepoisReadDevolvemOMesmoDocumento(t *testing.T) {
 	target := store(r)
 
 	state := usersync.State{
-		Version: usersync.StateVersion, Device: "mac-de-teste",
-		Usage: []usersync.ToolUsage{{ID: "git-dev-radar", Runs: 2, Favorite: true}},
+		Version: usersync.StateVersion, UpdatedAt: time.Now().UTC(), Device: "mac-de-teste",
+		Usage: []usersync.ToolUsage{{Host: "lealing", ID: "example-tool", Runs: 2, Favorite: true}},
 	}
 	revision, err := target.Write(context.Background(), credential(), usersync.DefaultRepository, state, "")
 	if err != nil {
@@ -148,7 +149,7 @@ func TestWriteEDepoisReadDevolvemOMesmoDocumento(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.State.Usage) != 1 || snapshot.State.Usage[0].ID != "git-dev-radar" {
+	if len(snapshot.State.Usage) != 1 || snapshot.State.Usage[0].ID != "example-tool" {
 		t.Fatalf("estado lido = %+v", snapshot.State)
 	}
 	if snapshot.Revision != revision {
@@ -159,11 +160,11 @@ func TestWriteEDepoisReadDevolvemOMesmoDocumento(t *testing.T) {
 func TestWriteRecusaQuandoARevisaoEsperadaEnvelheceu(t *testing.T) {
 	r := newRemote(t)
 	r.repository = map[string]any{"name": usersync.DefaultRepository, "private": true}
-	r.content = base64.StdEncoding.EncodeToString([]byte(`{"version":1}`))
+	r.content = base64.StdEncoding.EncodeToString([]byte(`{"version":3,"updatedAt":"2026-08-02T12:00:00Z"}`))
 	r.sha = "atual"
 
 	_, err := store(r).Write(context.Background(), credential(), usersync.DefaultRepository,
-		usersync.State{Version: usersync.StateVersion}, "antiga")
+		usersync.State{Version: usersync.StateVersion, UpdatedAt: time.Now().UTC()}, "antiga")
 	if !errors.Is(err, usersync.ErrConflict) {
 		t.Fatalf("Write = %v, quero conflito", err)
 	}
@@ -176,6 +177,23 @@ func TestReadRecusaBase64Corrompido(t *testing.T) {
 
 	if _, err := store(r).Read(context.Background(), credential(), usersync.DefaultRepository); err == nil {
 		t.Fatal("conteúdo corrompido foi aceito")
+	}
+}
+
+func TestReadRecusaVersaoAntigaECampoDesconhecido(t *testing.T) {
+	for name, document := range map[string]string{
+		"versão antiga":      `{"version":1,"updatedAt":"2026-08-02T12:00:00Z"}`,
+		"campo desconhecido": `{"version":3,"updatedAt":"2026-08-02T12:00:00Z","extra":true}`,
+		"campo duplicado":    `{"version":3,"version":3,"updatedAt":"2026-08-02T12:00:00Z"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRemote(t)
+			r.repository = map[string]any{"name": usersync.DefaultRepository, "private": true}
+			r.content = base64.StdEncoding.EncodeToString([]byte(document))
+			if _, err := store(r).Read(context.Background(), credential(), usersync.DefaultRepository); err == nil {
+				t.Fatal("documento incompatível foi aceito")
+			}
+		})
 	}
 }
 

@@ -177,7 +177,7 @@ func slug(value string) string {
 // as embutidas que resolveu desligar.
 //
 // Guardar as embutidas por nome, em vez de copiá-las para o arquivo, permite
-// que a engine mude o endereço do índice oficial numa atualização sem deixar
+// que a engine mude o endereço do índice padrão numa atualização sem deixar
 // para trás uma cópia congelada no disco de quem já tinha rodado a versão
 // anterior.
 type SourceState struct {
@@ -262,7 +262,7 @@ func (s *Service) AddSource(ctx context.Context, origin Origin) error {
 }
 
 // RemoveSource esquece uma origem do usuário. As embutidas só podem ser
-// desligadas, para que desinstalar o índice oficial por engano não deixe a
+// desligadas, para que desativar o índice padrão por engano não deixe a
 // engine sem nenhuma procedência conhecida.
 func (s *Service) RemoveSource(ctx context.Context, name string) error {
 	name = strings.TrimSpace(name)

@@ -10,32 +10,31 @@ import (
 // TestTermoLiteralGanhaDeSubsequencia trava o comportamento que o score cru do
 // fuzzy não garante: quem tem o termo inteiro no corpus vem primeiro.
 //
-// O caso é real. "pmset" está nas keywords do controle de energia, mas as
-// cinco letras também aparecem, espalhadas, no resumo em português de outras
-// tools — e o fuzzy, que penaliza a distância até o início do texto, colocava
-// a tool errada no topo conforme o acervo crescia.
+// O termo literal está nas keywords de uma extensão, mas suas letras também
+// aparecem espalhadas no resumo de outra. O fuzzy puro penaliza a distância
+// até o início e pode colocar a subsequência errada no topo.
 func TestTermoLiteralGanhaDeSubsequencia(t *testing.T) {
 	tools := []domain.Tool{
 		{
-			ID:       "self-update",
-			Name:     "Atualizar o lealing",
-			Summary:  "Compare a versão instalada com o último release e atualize sem sair da TUI.",
-			Keywords: []string{"update", "atualizar", "upgrade", "versão", "release"},
+			ID:       "another-tool",
+			Name:     "Outra extensão",
+			Summary:  "Compara medidas passadas e apresenta tendências para o usuário.",
+			Keywords: []string{"comparar", "medidas", "tendência"},
 		},
 		{
-			ID:       "power-control",
-			Name:     "Controle de Energia",
-			Summary:  "Defina se a máquina dorme na bateria e no carregador, e ajustes avançados de energia.",
-			Keywords: []string{"pmset", "powercfg", "energia", "bateria", "dormir"},
+			ID:       "example-tool",
+			Name:     "Example Tool",
+			Summary:  "Extensão usada para validar a relevância da busca.",
+			Keywords: []string{"literal", "exato", "fixture"},
 		},
 	}
 
-	got := search.NewFuzzy().Rank("pmset", tools)
+	got := search.NewFuzzy().Rank("literal", tools)
 	if len(got) == 0 {
-		t.Fatal("busca por “pmset” não achou nada")
+		t.Fatal("busca por “literal” não achou nada")
 	}
-	if got[0].Tool.ID != "power-control" {
-		t.Errorf("primeiro resultado = %s, quero power-control", got[0].Tool.ID)
+	if got[0].Tool.ID != "example-tool" {
+		t.Errorf("primeiro resultado = %s, quero example-tool", got[0].Tool.ID)
 	}
 }
 
@@ -57,12 +56,12 @@ func TestTermoVazioDevolveTudoNaOrdemOriginal(t *testing.T) {
 // esse nome, mesmo quando outra menciona o termo entre as palavras-chave.
 func TestNomeGanhaDeKeyword(t *testing.T) {
 	tools := []domain.Tool{
-		{ID: "outra", Name: "Uso de Tokens", Keywords: []string{"energia"}},
-		{ID: "power-control", Name: "Energia", Summary: "Perfis de energia."},
+		{ID: "another-tool", Name: "Outra extensão", Keywords: []string{"exemplo"}},
+		{ID: "example-tool", Name: "Exemplo", Summary: "Extensão de exemplo."},
 	}
 
-	got := search.NewFuzzy().Rank("energia", tools)
-	if got[0].Tool.ID != "power-control" {
-		t.Errorf("primeiro resultado = %s, quero power-control", got[0].Tool.ID)
+	got := search.NewFuzzy().Rank("exemplo", tools)
+	if got[0].Tool.ID != "example-tool" {
+		t.Errorf("primeiro resultado = %s, quero example-tool", got[0].Tool.ID)
 	}
 }

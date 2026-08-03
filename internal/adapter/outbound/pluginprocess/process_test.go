@@ -46,6 +46,9 @@ func runHelper(behavior string) int {
 		versions = protocol.VersionRange{Min: 2, Max: 2}
 	}
 	first := protocol.Snapshot{Sequence: 1, Body: "primeiro", Hints: []protocol.Hint{{Key: "esc", Label: "voltar"}}}
+	if behavior == "environment" {
+		first.Body = initialize.HomeDir + "|" + initialize.DataDir + "|" + initialize.CacheDir
+	}
 	initialized := protocol.Initialized{
 		Protocol: versions, ToolVersion: "1.0.0", UIMode: protocol.UIModeScreenV1,
 		State: "ready", Snapshot: &first,
@@ -186,9 +189,23 @@ func runtime(t testing.TB, behavior string, capabilities ...string) (*pluginproc
 	options := interactive.StartOptions{
 		EngineVersion: "test", Platform: "darwin", Architecture: "arm64",
 		Frame: interactive.Frame{Width: 80, Height: 20}, Capabilities: capabilities,
-		DataDir: t.TempDir(), CacheDir: t.TempDir(),
+		HomeDir: t.TempDir(), DataDir: t.TempDir(), CacheDir: t.TempDir(),
 	}
 	return r, tool, options
+}
+
+func TestHandshakeEntregaDiretoriosDaMaquina(t *testing.T) {
+	r, tool, options := runtime(t, "environment")
+	session, err := r.Start(context.Background(), tool, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Shutdown(context.Background())
+	got := nextUpdate(t, session)
+	want := strings.Join([]string{options.HomeDir, options.DataDir, options.CacheDir}, "|")
+	if got.Snapshot == nil || got.Snapshot.Body != want {
+		t.Fatalf("ambiente = %+v, quero %q", got.Snapshot, want)
+	}
 }
 
 func nextUpdate(t *testing.T, session interactive.Session) interactive.Update {

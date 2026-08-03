@@ -7,7 +7,7 @@ import (
 )
 
 func TestToolSemPlataformaDeclaradaEPortavel(t *testing.T) {
-	tool := domain.Tool{ID: "portavel", Name: "Portável", Category: "system"}
+	tool := domain.Tool{Host: "example-host", ID: "portavel", Name: "Portável", Category: "system"}
 
 	if got := tool.SupportedPlatforms(); got != domain.AllPlatforms {
 		t.Errorf("SupportedPlatforms = %v, quero todas", got)
@@ -24,7 +24,7 @@ func TestToolSemPlataformaDeclaradaEPortavel(t *testing.T) {
 
 func TestToolRodaSoOndeDeclara(t *testing.T) {
 	tool := domain.Tool{
-		ID: "power-control", Name: "Energia", Category: "system",
+		Host: "example-host", ID: "example-tool", Name: "Example Tool", Category: "system",
 		Platforms: domain.Darwin | domain.Windows,
 	}
 
@@ -43,7 +43,7 @@ func TestToolRodaSoOndeDeclara(t *testing.T) {
 
 func TestValidateRecusaBitDesconhecido(t *testing.T) {
 	tool := domain.Tool{
-		ID: "torta", Name: "Torta", Category: "system",
+		Host: "example-host", ID: "torta", Name: "Torta", Category: "system",
 		Platforms: domain.Platform(1 << 6),
 	}
 	if err := tool.Validate(); err == nil {

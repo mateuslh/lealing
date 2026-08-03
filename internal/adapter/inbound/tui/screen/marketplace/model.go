@@ -8,6 +8,7 @@ package marketplace
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -15,8 +16,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
+	"github.com/mateuslh/lealing/internal/core/toolmanage"
 )
 
 // tab é a face visível da tela.
@@ -24,6 +27,7 @@ type tab int
 
 const (
 	tabTools tab = iota
+	tabManage
 	tabSources
 )
 
@@ -80,13 +84,16 @@ type sourceForm struct {
 type Model struct {
 	deps    tui.Deps
 	manager coremarket.Manager
+	tools   toolmanage.Manager
 
 	tab     tab
 	catalog coremarket.Catalog
 	visible []coremarket.Listing
 	origins []coremarket.Origin
+	managed []toolmanage.Item
 
 	toolCursor   int
+	manageCursor int
 	sourceCursor int
 
 	searching bool
@@ -106,6 +113,10 @@ type Model struct {
 	// destrutivas seria pesado demais; ainda assim, um "d" acidental não
 	// pode descartar um cadastro em silêncio.
 	pendingRemoval string
+	// pendingUninstall guarda uma remoção de pacote aguardando confirmação.
+	// Builtins não entram neste estado: elas são desativadas, nunca fingem
+	// possuir um artefato separado que poderia ser apagado.
+	pendingUninstall *toolmanage.Item
 
 	loading    bool
 	installing string
@@ -116,13 +127,13 @@ type Model struct {
 
 var _ tui.Screen = (*Model)(nil)
 
-func New(deps tui.Deps, manager coremarket.Manager) *Model {
+func New(deps tui.Deps, manager coremarket.Manager, tools toolmanage.Manager) *Model {
 	query := textinput.New()
 	query.Prompt = ""
 	query.Placeholder = "buscar por nome, publicador ou origem"
 	query.CharLimit = 96
 
-	return &Model{deps: deps, manager: manager, loading: true, query: query}
+	return &Model{deps: deps, manager: manager, tools: tools, loading: true, query: query}
 }
 
 func (*Model) ID() tui.ScreenID { return "tool/marketplace" }
@@ -149,6 +160,16 @@ type installedMsg struct {
 	err          error
 }
 
+type managedMsg struct {
+	items []toolmanage.Item
+	err   error
+}
+
+type toolChangedMsg struct {
+	message string
+	err     error
+}
+
 // sourceChangedMsg fecha o ciclo de uma mutação de origem: a lista só é
 // recarregada depois que a escrita terminou, para a tela nunca exibir um
 // cadastro que ainda não está no disco.
@@ -158,7 +179,7 @@ type sourceChangedMsg struct {
 }
 
 func (m *Model) reload() tea.Cmd {
-	return tea.Batch(m.loadCatalog(), m.loadSources())
+	return tea.Batch(m.loadCatalog(), m.loadManaged(), m.loadSources())
 }
 
 func (m *Model) loadCatalog() tea.Cmd {
@@ -187,6 +208,19 @@ func (m *Model) loadSources() tea.Cmd {
 		defer cancel()
 		origins, err := manager.Sources(ctx)
 		return sourcesMsg{origins: origins, err: err}
+	}
+}
+
+func (m *Model) loadManaged() tea.Cmd {
+	manager := m.tools
+	return func() tea.Msg {
+		if manager == nil {
+			return managedMsg{err: errors.New("gerenciamento de tools não configurado")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		items, err := manager.List(ctx)
+		return managedMsg{items: items, err: err}
 	}
 }
 
@@ -240,6 +274,35 @@ func (m *Model) toggleSource(name string, enabled bool) tea.Cmd {
 	}
 }
 
+func (m *Model) toggleTool(id domain.ToolID, enabled bool) tea.Cmd {
+	manager := m.tools
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := manager.SetEnabled(ctx, id, enabled); err != nil {
+			return toolChangedMsg{err: err}
+		}
+		state := "ativada"
+		if !enabled {
+			state = "desativada"
+		}
+		return toolChangedMsg{message: string(id) + " " + state}
+	}
+}
+
+func (m *Model) uninstallTool(id domain.ToolID) tea.Cmd {
+	manager := m.tools
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		removed, err := manager.Remove(ctx, id)
+		if err != nil {
+			return toolChangedMsg{err: err}
+		}
+		return toolChangedMsg{message: removed.ID + " desinstalada; recuperação em " + removed.RecoveryDir}
+	}
+}
+
 // applyFilters recalcula a lista visível e mantém o cursor sobre a mesma tool
 // sempre que ela sobrevive ao novo recorte.
 func (m *Model) applyFilters() {
@@ -281,7 +344,7 @@ func matchesFilter(listing coremarket.Listing, active filter) bool {
 }
 
 // matchesTerms exige todos os termos, cada um em qualquer campo: é o que faz
-// "token lealing" encontrar a tool de tokens publicada pela origem oficial.
+// "example lealing" encontrar a extensão publicada pela origem padrão.
 func matchesTerms(listing coremarket.Listing, terms []string) bool {
 	if len(terms) == 0 {
 		return true
@@ -310,6 +373,13 @@ func (m *Model) currentSource() (coremarket.Origin, bool) {
 		return coremarket.Origin{}, false
 	}
 	return m.origins[m.sourceCursor], true
+}
+
+func (m *Model) currentManaged() (toolmanage.Item, bool) {
+	if m.manageCursor < 0 || m.manageCursor >= len(m.managed) {
+		return toolmanage.Item{}, false
+	}
+	return m.managed[m.manageCursor], true
 }
 
 // sourceStatus liga uma origem ao resultado da última consulta. Origens

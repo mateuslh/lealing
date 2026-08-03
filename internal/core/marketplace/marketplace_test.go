@@ -161,7 +161,7 @@ func (f *fakeReloader) Reload(context.Context) error { f.calls++; return nil }
 
 func officialOrigin() marketplace.Origin {
 	return marketplace.Origin{
-		Name: "lealing", Label: "índice oficial", Kind: marketplace.OriginRemote,
+		Name: "lealing", Label: "índice padrão", Kind: marketplace.OriginRemote,
 		Ref: "https://example.test/index.json", Trusted: true, Builtin: true, Enabled: true,
 	}
 }
@@ -224,7 +224,7 @@ func TestServiceInstalaPacoteSelecionadoERecarregaCatalogo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if installation.ID != "demo" || installer.request.ExpectedID != "demo" || installer.request.ExpectedVersion != "1.2.0" || installer.request.ExpectedManifest == nil || installer.request.ExpectedManifest.Risk != "safe" {
+	if installation.ID != "demo" || installer.request.Host != "lealing" || installer.request.ExpectedID != "demo" || installer.request.ExpectedVersion != "1.2.0" || installer.request.ExpectedManifest == nil || installer.request.ExpectedManifest.Risk != "safe" {
 		t.Fatalf("instalação=%+v request=%+v", installation, installer.request)
 	}
 	if cleanups != 1 || reloader.calls != 1 {

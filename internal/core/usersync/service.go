@@ -196,6 +196,9 @@ func (s *Service) Push(ctx context.Context, force bool) (Result, error) {
 	document.Device = s.config.Device
 	document.Engine = s.config.Engine
 	document.Normalize()
+	if err := document.Validate(); err != nil {
+		return Result{}, err
+	}
 
 	expected := settings.Revision
 	if force {
@@ -330,7 +333,8 @@ func equalContent(a, b State) bool {
 	}
 	for index := range a.Usage {
 		left, right := a.Usage[index], b.Usage[index]
-		if left.ID != right.ID || left.Runs != right.Runs || left.Favorite != right.Favorite {
+		if left.Host != right.Host || left.ID != right.ID || left.Runs != right.Runs ||
+			!left.LastRun.Equal(right.LastRun) || left.Favorite != right.Favorite {
 			return false
 		}
 	}

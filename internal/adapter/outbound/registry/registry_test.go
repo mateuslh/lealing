@@ -58,6 +58,40 @@ func TestSemPlatformOAcervoEInteiro(t *testing.T) {
 	}
 }
 
+func TestRegistryPreservaHostPersistidoPeloProviderDeInstalacoes(t *testing.T) {
+	providers := acervo()
+	static := providers[0].(*registry.Static)
+	static.Tools[0].Host = "origem-persistida"
+	repository := registry.New(providers)
+	tool, err := repository.ByID(context.Background(), "so-mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.ToolRef{Host: "origem-persistida", ID: "so-mac"}
+	if tool.Ref() != want {
+		t.Fatalf("referência = %+v, quero %+v", tool.Ref(), want)
+	}
+}
+
+func TestRegistryUsaNomeDoProviderQuandoToolNaoInformaHost(t *testing.T) {
+	repository := registry.New(acervo())
+	tool, err := repository.ByID(context.Background(), "so-mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.Host != "teste" {
+		t.Fatalf("host = %q, quero teste", tool.Host)
+	}
+}
+
+func TestRegistryRecusaHostDuplicado(t *testing.T) {
+	providers := acervo()
+	providers = append(providers, &registry.Static{Label: "teste"})
+	if _, err := registry.New(providers).All(context.Background()); err == nil {
+		t.Fatal("dois providers com o mesmo host foram aceitos")
+	}
+}
+
 // A tool escondida some de verdade: ByID também precisa recusá-la, senão um
 // favorito antigo abriria uma tela sem adapter por trás.
 func TestByIDNaoRessuscitaToolDeOutraPlataforma(t *testing.T) {

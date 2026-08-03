@@ -64,7 +64,7 @@ go install github.com/mateuslh/lealing/cmd/lealing@latest
 ```
 
 O binário vai para `$(go env GOPATH)/bin`. A versão fica como `dev` — o
-`go install` não injeta a tag —, e a tool de atualização trata esse caso.
+`go install` não injeta a tag —, e o atualizador da engine trata esse caso.
 
 **Para desenvolver**, do clone:
 
@@ -94,8 +94,8 @@ instalação:
 
 ```sh
 lealing -marketplace
-lealing -tool-install token-usage
-lealing -tool-update token-usage
+lealing -tool-install example-tool
+lealing -tool-update example-tool
 lealing -tools
 ```
 
@@ -118,7 +118,10 @@ e a versão escolhidos antes da troca atômica.
 
 O índice público consolidado fica em
 [`lealing-tools/marketplace/index.json`](https://github.com/mateuslh/lealing-tools/blob/main/marketplace/index.json).
-Para testar outro registry compatível, use `-marketplace-url URL_HTTPS`.
+Esse repositório é apenas o acervo configurado por padrão e um exemplo de uso;
+o contrato normativo para criar e publicar tools está no
+[guia mantido pela engine](docs/tool-development.md). Para testar outro
+registry compatível, use `-marketplace-url URL_HTTPS`.
 
 Liste somente o que já está instalado:
 
@@ -139,13 +142,16 @@ lealing -sync-pull      # baixa
 lealing -logout
 ```
 
-Na TUI, a tool **Conta e Sincronização** faz o mesmo com `s` enviar, `b`
-baixar e `espaço` para ligar cada seção.
-
 Três seções, ligadas e desligadas separadamente: **favoritos e uso**,
 **origens do marketplace** e **tools instaladas** — desta última só a lista
 viaja, porque instalar código de terceiros continua sendo uma decisão sua,
 tool a tool, no marketplace.
+
+O `state.json` usa exclusivamente o formato v3. Toda preferência de tool é
+qualificada por `host` e `id` (`lealing/token-usage`, por exemplo), então uma
+origem paralela que publique o mesmo ID não herda favoritos, histórico nem a
+lista de instalações. A leitura também recusa campos desconhecidos,
+duplicados, coleções acima dos limites e referências ou versões inválidas.
 
 O que nunca sai da máquina: credenciais. As contas do Claude Code, os tokens
 do cofre e qualquer segredo ficam onde estão — repositório privado não é
@@ -184,7 +190,7 @@ vence o valor do build.
 | Seção | O que tem |
 |---|---|
 | **Conta** | Client ID do OAuth App usado no login |
-| **Marketplace** | URL do índice oficial e se a home consulta as origens ao abrir |
+| **Marketplace** | URL do índice padrão e se a home consulta as origens ao abrir |
 | **Aparência** | Nome usado na saudação da home |
 | **Ambiente** | Versão e os caminhos onde a engine guarda config, dados, cache e tools |
 
@@ -201,7 +207,7 @@ em vez de parecerem sem efeito.
 ### Repositórios paralelos de tools
 
 O marketplace não é um endereço: é a soma das origens que você habilitou.
-Além do índice oficial embutido, dá para registrar quantos repositórios
+Além do índice padrão embutido, dá para registrar quantos repositórios
 quiser — um índice publicado por HTTPS ou um diretório no seu disco:
 
 ```sh
@@ -223,9 +229,10 @@ Três regras mantêm a descentralização segura:
   canais `official` e `verified`; qualquer outra tem suas entradas rebaixadas
   para `community`, mesmo que o JSON diga o contrário.
 - **Conflito de ID é vencido por prioridade, não por versão.** Se um índice
-  paralelo publicar `token-usage` na versão 9.9.9, a entrada oficial continua
-  sendo a instalada por padrão. Para escolher a outra de propósito, use a
-  referência qualificada: `lealing -tool-install origem/token-usage`.
+  paralelo publicar `example-tool` numa versão maior, a entrada da origem
+  prioritária continua sendo instalada por padrão. Para escolher a outra de
+  propósito, use a referência qualificada:
+  `lealing -tool-install origem/example-tool`.
 - **Uma origem fora do ar não derruba as demais.** Cada índice é buscado e
   validado isoladamente; a falha aparece marcada na aba de origens e o resto
   do catálogo continua utilizável.
@@ -261,15 +268,25 @@ Uma atualização local usa o mesmo formato e preserva a versão anterior:
 
 ```sh
 lealing -tool-update ./pacote-novo
-lealing -tool-rollback token-usage
-lealing -tool-remove token-usage
+lealing -tool-rollback example-tool
+lealing -tool-disable example-tool
+lealing -tool-enable example-tool
+lealing -tool-remove example-tool
 ```
 
-A vertical oficial vive em
-[`mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools). Autores
-independentes podem hospedar seus próprios releases e enviar uma entrada pelo
-[guia de publicação](https://github.com/mateuslh/lealing-tools/blob/main/marketplace/README.md).
-A engine abre normalmente sem nenhuma tool externa; uma ausente não vira item
+Na TUI, abra o marketplace com `m` e vá à aba **gerenciar**. `espaço`
+ativa ou desativa a tool selecionada; `d` abre a confirmação de
+desinstalação. Desativar mantém o pacote e a versão anterior no disco.
+Desinstalar move a instalação para `.trash` e mostra o caminho recuperável.
+
+A engine configura o índice indicado acima como origem padrão. Ele continua
+sendo um repositório externo como qualquer outra origem: a engine conhece o
+índice, mas não os IDs nem a implementação das tools publicadas. O contrato
+para criar uma tool ou hospedar um marketplace independente está no
+[guia de desenvolvimento da engine](docs/tool-development.md).
+
+A engine não inclui nenhuma tool. Ela abre com catálogo vazio, descobre apenas
+pacotes instalados e nunca transforma a ausência de uma extensão em item
 quebrado.
 
 Instalações ficam em
@@ -278,14 +295,12 @@ Instalações ficam em
 para a versão atual, `previous` guarda o rollback e remoções recuperáveis vão
 para `.trash`. `XDG_DATA_HOME` continua tendo prioridade quando definido.
 
-Manifest, checksums e índice do marketplace usam a
-[última release disponível](https://github.com/mateuslh/lealing-tools/releases/latest),
-nunca um link de documentação preso a uma versão numérica.
+Cada entrada do marketplace aponta para seu manifest e artefatos versionados.
+A engine segue essas URLs e checksums; não fixa em código uma versão de tool.
 
 ## Atualização
 
-A tool **Atualizar o lealing** faz o trabalho de dentro da TUI, e o mesmo
-caminho existe fora dela:
+A atualização é uma capacidade administrativa da engine, exposta pela CLI:
 
 ```sh
 lealing -update
@@ -321,63 +336,35 @@ a release. O clone local não cria tag nem faz um commit especial de release.
 `VERSION` é obrigatório e precisa seguir `vX.Y.Z`. Tag já usada, formatação
 pendente, teste quebrado ou falha de compilação interrompem a publicação.
 
-## Tools
+## Catálogo e tools
 
-| Tool | O que faz |
-|---|---|
-| **Informações do Sistema** | Sistema, chip, memória, tempo ligado e bateria. Somente leitura. |
-| **Controle de Energia** | Perfis de energia da bateria e do carregador, com presets e aplicação via `pmset` (macOS) ou `powercfg` (Windows). |
-| **Uso de Tokens** | Tool externa `screen-v1`: cotas das CLIs de IA, consumo e custo por janela, modelo, projeto e dia. |
-| **Contas do Claude Code** | Guarda as sessões de várias contas e alterna entre elas sem refazer login. |
-| **Atualizar o lealing** | Compara a versão instalada com o último release e atualiza pelo caminho por onde o lealing foi instalado. |
-| **Conta e Sincronização** | Entra na conta do GitHub pelo device flow e leva favoritos, uso e origens para um repositório privado seu. |
-| **Clone Repo Bradesco** | Descobre a família de um projeto no GitHub, clona os repositórios escolhidos e os registra no IntelliJ. |
-| **Radar Git do dev** | Varre os clones em `~/dev`, mostra branches e alterações pendentes e oferece ações Git explícitas. |
-| **Bancada de engenharia** | Sonda HTTP, DNS/TLS, JSON, JWT, CIDR, codecs, checksums e UUIDs em telas nativas. |
+A engine não compila verticais concretas. O conteúdo do catálogo muda sem
+exigir uma release do lealing: cada origem publica seus próprios IDs, versões,
+plataformas, requisitos e permissões.
 
-As cotas das duas CLIs são consultadas **ao vivo na conta**, nas mesmas
-rotas que elas próprias usam para desenhar seu `/usage` — Claude Code em
-`api.anthropic.com`, Codex em `chatgpt.com/backend-api`. A autenticação
-reaproveita a sessão que cada CLI já mantém: o chaveiro do macOS para o
-Claude Code, `~/.codex/auth.json` para o Codex. O lealing só **lê** essas
-credenciais: não cria, não renova e não grava nenhuma, e o painel diz de
-onde veio cada número (`conta · pro`).
+O guia normativo para desenvolver uma extensão está em
+**[docs/tool-development.md](docs/tool-development.md)**. Ele cobre arquitetura,
+manifest, SDKs públicos, `screen-v1`, plataforma, permissões, testes,
+empacotamento, instalação local e publicação de um índice próprio. Os contratos
+executáveis vivem em `sdk/*`, `internal/toolmanifest` e
+`internal/core/marketplace`, todos nesta engine.
 
-Quando a conta não responde, o Codex cai no último `token_count` gravado em
-`~/.codex/sessions` — rotulado `log local · visto há 2d`, porque esse número
-tem a idade do último uso e a janela pode ter virado desde então. Sem
-sessão, o bloco mostra o consumo medido dos logs; com a sessão vencida, a
-barra de status pede para rodar `claude` ou `codex`.
+A origem padrão é apenas um exemplo não normativo de consumidor desse contrato.
+A engine não importa domínio, adapters ou model daquele repositório e não cria
+factory por ID. Para alterar a engine, siga **[AGENTS.md](AGENTS.md)**.
 
-**Contas do Claude Code** guarda o par que define quem a CLI acha que você
-é: a credencial OAuth, que vive no cofre da plataforma, e o bloco
-`oauthAccount` do `~/.claude.json`. Mover só o primeiro deixaria a CLI
-autenticada em uma conta e exibindo outra, então a tool trata os dois como
-uma coisa só. `s` guarda a sessão atual sob um nome, `↵` devolve a escolhida
-ao lugar de onde a CLI lê.
+O SDK público também expõe `sdk/machine`: a factory recebe plataforma,
+arquitetura, home e diretórios privados já negociados; resolve concessões do
+manifest; escolhe adapters sem fallback entre sistemas; executa subprocessos
+sem shell e grava estado local atomicamente. Use `screen.FactoryWithError`
+com `machine.Select` para reportar uma plataforma sem implementação.
 
-Os tokens ficam onde o sistema sabe protegê-los — itens do chaveiro no
-macOS, um arquivo só do dono (`0600`) no Windows e no Linux, ao lado do que a
-própria CLI já grava ali. O índice em `~/.local/share/lealing/claude-accounts.json`
-tem apenas e-mail, plano e data. Antes de escrever no `~/.claude.json` o
-arquivo inteiro é copiado para `claude-json.backup`, e a gravação é atômica:
-todo campo que não conhecemos — projetos, histórico, contadores — atravessa
-a troca intacto.
-
-Duas proteções valem ser conhecidas: trocar de conta com uma sessão que não
-está guardada em nenhum perfil pede confirmação, porque depois da escrita
-aquela credencial não existe mais em lugar nenhum; e **feche as sessões do
-`claude` antes de trocar** — ao sair, a CLI regrava a conta em que estava.
-
-As tools históricas vieram do [Arteus Tools](../ArteusTools). `token-usage`
-foi extraída para
-[`lealing-tools`](https://github.com/mateuslh/lealing-tools): a engine não
-importa seu domínio, adapters nem model. Para criar outra sem editar o bootstrap, veja
-**[AGENTS.md](AGENTS.md#11-criando-uma-tool-externa-screen-v1)**.
+Atualização, login, sincronização, configuração e marketplace são capacidades
+administrativas da engine. Elas não aparecem no catálogo e não simulam tools.
 
 ## Plataformas
 
-macOS e Windows 10+. Cada tool declara em quais sistemas roda, e o catálogo
+macOS, Windows 10+ e Linux. Cada tool declara em quais sistemas roda, e o catálogo
 esconde as demais: no Windows, uma tool exclusiva do macOS não aparece na
 busca nem nas sugestões, em vez de abrir e falhar no primeiro comando.
 
@@ -385,49 +372,38 @@ busca nem nas sugestões, em vez de abrir e falhar no primeiro comando.
 lealing -platforms      # a matriz, gerada do catálogo
 ```
 
-| Tool | macOS | Windows | Como |
-|---|:---:|:---:|---|
-| Informações do Sistema | ✓ | ✓ | `sysctl`/`sw_vers`/`pmset` · CIM (WMI) |
-| Controle de Energia | ✓ | parcial | `pmset` · `powercfg` |
-| Uso de Tokens | ✓ | ✓ | lê os logs das CLIs, iguais nos dois |
-| Contas do Claude Code | ✓ | ✓ | chaveiro (`security`) · `~/.claude/.credentials.json` |
-| Atualizar o lealing | ✓ | ✓ | releases do GitHub · `git` + `go build` |
-| Clone Repo Bradesco | ✓ | ✓ | GitHub CLI + Git · recentes do IntelliJ |
-| Radar Git do dev | ✓ | ✓ | leitura e ações via Git |
-| Bancada de engenharia | ✓ | ✓ | biblioteca padrão e rede |
+A matriz é gerada dos manifests instalados. A documentação da engine não
+mantém uma cópia, porque ela ficaria desatualizada assim que uma origem
+publicasse ou removesse um artefato.
 
-**Parcial** quer dizer painel menor, não tool quebrada: o `powercfg` grava os
-três tempos de inatividade (dormir, tela, disco) e não tem equivalente para
-Power Nap, standby, `tcpkeepalive` nem modo de hibernação. O `power.Manager`
-declara o que sabe gravar (`Features()`) e a tela desenha só isso — nenhum
-interruptor que não chegaria ao sistema, e nenhum "alterações não aplicadas"
-que aplicar não resolve. No Windows também não há dispensa de senha a
-oferecer: mudar o plano de energia do próprio usuário não pede elevação.
-
-O estado vai para `%LOCALAPPDATA%\lealing` no Windows e `~/.local/share/lealing`
-no macOS — em ambos, `XDG_DATA_HOME` tem prioridade se estiver definida.
+O estado vai para `%LOCALAPPDATA%\lealing` no Windows e
+`~/.local/share/lealing` no macOS e Linux. `XDG_DATA_HOME` tem prioridade
+quando definida.
 
 No Windows, `make install` não se aplica (o wrapper é um shell script que
 recompila sozinho): use `make build-windows`, que gera `bin/lealing.exe`, e
 ponha o executável onde preferir.
 
-Linux compila e a TUI roda, mas as tools que dependem de adapter nativo ainda
-não têm um: elas somem do catálogo até que exista.
+Linux compila e a TUI roda. Cada repositório externo decide no manifest se
+publica ou não um artefato Linux; a engine não presume suporte.
 
 ## Uso
 
 ```sh
 lealing                                          # abre a TUI
 lealing -render 150x42                           # imprime um frame estático
-lealing -render 120x34 -keys '/token[enter]'     # já dentro de uma tool
+lealing -render 120x34 -keys '/example[enter]'   # já dentro de uma tool
 lealing -update                                  # atualiza e sai
 lealing -marketplace                             # tools compatíveis em todas as origens
 lealing -sources                                 # repositórios de tools cadastrados
 lealing -source-add /Users/voce/dev/tools        # registra um repo próprio
-lealing -tools                                   # tools externas instaladas
-lealing -tool-install token-usage                # instala pelo marketplace
+lealing -tools                                   # tools instaladas e estado de ativação
+lealing -tool-install example-tool               # instala pelo marketplace
 lealing -tool-install ./pacote                   # instala/atualiza localmente
-lealing -tool-rollback token-usage               # recupera versão anterior
+lealing -tool-rollback example-tool              # recupera versão anterior
+lealing -tool-disable example-tool               # esconde sem desinstalar
+lealing -tool-enable example-tool                # torna ativa novamente
+lealing -tool-remove example-tool                # move o pacote para .trash
 ```
 
 Flags: `-debug` (log em arquivo + validação estrita do catálogo),
@@ -435,13 +411,14 @@ Flags: `-debug` (log em arquivo + validação estrita do catálogo),
 `-update` (atualiza a engine sem abrir a TUI), `-marketplace`,
 `-marketplace-url`, `-sources`, `-source-add`, `-source-name`,
 `-source-remove`, `-source-enable`, `-source-disable`, `-tools`,
-`-tool-install`, `-tool-update`, `-tool-remove`, `-tool-rollback`,
+`-tool-install`, `-tool-update`, `-tool-enable`, `-tool-disable`,
+`-tool-remove`, `-tool-rollback`,
 `-tool-validate`, `-login`, `-logout`, `-sync`, `-sync-push`, `-sync-pull`,
 `-force` e `-version`.
 
-Sem instalar tools: `make run`. Para renderizar `token-usage`, instale o pacote
-extraído da release oficial e use
-`make render SIZE=150x42 KEYS='/token[enter]'`.
+Sem instalar tools: `make run`. Para renderizar uma extensão, instale um pacote
+e use `make render SIZE=150x42 KEYS='/consulta[enter]'`, trocando `consulta`
+por um termo que encontre o item instalado.
 
 ## Atalhos
 
@@ -461,12 +438,10 @@ extraído da release oficial e use
 | `q` | sai |
 
 A busca aceita filtros inline combináveis com texto livre:
-`tag:sistema`, `cat:ai`, `kind:builtin`, `is:fav`.
+`tag:sistema`, `cat:ai`, `kind:process`, `is:fav`.
 
-Dentro de uma tool, a barra de status lista os atalhos daquela tela. No
-**Controle de Energia**, `↑ ↓` escolhe o campo, `← →` ajusta o valor e
-`⇧← ⇧→` troca entre bateria e carregador — as setas puras editam, porque
-mudar valores é o que a tela existe para fazer.
+Dentro de uma tool, a barra de status lista os atalhos publicados pelo próprio
+processo externo.
 
 ## Arquitetura
 
@@ -497,15 +472,16 @@ sdk/
   protocol/                     DTOs + framing; somente biblioteca padrão
   screen/                       adapter Bubble Tea para screen-v1
   component/                    componentes visuais públicos
+  machine/                      plataforma, permissões, processos e arquivos
 internal/
   core/
     domain/                     catálogo, runtime declarativo e uso
     interactive/                portas e caso de uso de sessão externa
     toolinstall/ marketplace/   instalação, rollback e agregação de origens
+    toolmanage/                 ativação, desativação e remoção explícitas
     usersync/                   estado sincronizável, conflito e seções
     settings/                   campos declarados, validação e precedência
     service/                    catálogo, launcher e requisitos
-    sysinfo/ power/             núcleos das tools ainda builtin
   adapter/
     inbound/tui/
       screen/home/              home, busca e catálogo consolidado
@@ -522,9 +498,9 @@ internal/
       githubstate/              repositório privado de preferências
       usersyncstore/            credencial no cofre e ajustes em JSON
       toolstore/                instalação local atômica e rollback
+      toolstate/                referências host/ID desativadas em JSON atômico
       registry/ search/         consolidação e relevância
       persistence/              favoritos e estatísticas em JSON atômico
-      macos/ windows/           adapters das builtins por plataforma
   toolmanifest/                 valida lealing.dev/v1
   architecture/                testes das fronteiras de dependência
   bootstrap/                    único composition root
@@ -532,17 +508,18 @@ internal/
 
 ### Por que assim
 
-- **Um núcleo por tool.** `core/power` conhece perfis de energia e nada mais;
-  não sabe que `pmset` existe. Trocar o backend é trocar o adapter.
+- **Nenhum núcleo de tool na engine.** Domínio, adapters e model pertencem ao
+  repositório que publica o executável; a engine conhece apenas manifest e
+  protocolo.
 - **Providers independentes.** Cada fonte publica um
   `outbound.ToolProvider`; o `registry` consolida, valida e indexa uma vez
   só. Tool sem nome, ID duplicado ou categoria não declarada falham no
   registro, não na tela.
 - **Paginação obrigatória.** `domain.Query` sempre carrega `Offset`/`Limit`.
   A TUI nunca materializa o acervo inteiro.
-- **Telas sob demanda.** Builtins continuam no mapa `tui.Screens`. Qualquer
-  item `screen-v1` abre a mesma `PluginScreen`, sem factory ou import por ID;
-  outros processos ainda usam runners tipados.
+- **Uma tela genérica.** Qualquer item `screen-v1` abre a mesma
+  `PluginScreen`, sem factory ou import por ID; a instalação decide quais
+  tools existem.
 - **Grafo acíclico.** O buscador calcula relevância textual; o serviço do
   catálogo combina frequência, recência e favoritos. Nenhum adapter recebe
   uma closure de volta para um caso de uso.
@@ -562,22 +539,21 @@ make cover    # relatório de cobertura
 
 A suíte cobre framing parcial, limite de mensagens, handshake, crash,
 cancelamento, shutdown, capabilities, manifests, descoberta sem spawn,
-instalação/rollback, sanitização ANSI, a PluginScreen genérica, parsers nativos
-e as fronteiras de dependência. A **geometria da TUI** renderiza as telas da
-engine em nove tamanhos, de 200×60 a 26×8, verificando que nenhuma linha excede
-o frame. Domínio, adapters e geometria reais de `token-usage` são testados no
-repositório [`lealing-tools`](https://github.com/mateuslh/lealing-tools).
+instalação/rollback, sanitização ANSI, a PluginScreen genérica, adapters
+administrativos e as fronteiras de dependência. A **geometria da TUI**
+renderiza as telas da engine em nove tamanhos, de 200×60 a 26×8, verificando
+que nenhuma linha excede o frame. Domínio, adapters e geometria de extensões
+são responsabilidade do repositório que as publica.
 
-Os adapters de plataforma não têm build tag: o que é específico do sistema é o
-processo que eles disparam, não o código Go. Por isso os parsers do Windows
-são exercitados na mesma suíte que roda no Mac, com amostras reais de saída —
-e `make cross` pega a única quebra que resta, a de um import que só existe de
-um lado.
+`make cross` compila a engine para todos os alvos publicados e pega imports ou
+arquivos específicos de sistema que a suíte executada numa única plataforma
+não alcança.
 
 Esse teste de geometria pegou seis bugs reais durante a construção, entre eles
 uma fila de cartões transbordando a largura (o `lipgloss.Width` dimensiona o
 conteúdo, não o bloco com borda) e painéis saindo pela base em janelas baixas.
-Toda tela nova deve entrar nele — veja a seção 6 do **[AGENTS.md](AGENTS.md)**.
+Toda tela administrativa nova deve entrar nele — veja
+**[AGENTS.md](AGENTS.md#7-componentes-e-geometria)**.
 
 Em janela pequena a home descarta painéis que não cabem. O que é desenhado é
 também o que o teclado alcança: o foco nunca fica num painel invisível, e a

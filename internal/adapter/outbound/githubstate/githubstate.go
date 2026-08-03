@@ -27,6 +27,7 @@ const (
 	defaultAPI    = "https://api.github.com"
 	apiVersion    = "2022-11-28"
 	responseLimit = 8 << 20
+	stateLimit    = 1 << 20
 )
 
 type HTTPClient interface {
@@ -148,12 +149,86 @@ func (s *Store) Read(ctx context.Context, credential usersync.Credential, name s
 	if err != nil {
 		return usersync.Snapshot{}, fmt.Errorf("estado remoto ilegível: %w", err)
 	}
-
-	var state usersync.State
-	if err := json.Unmarshal(decoded, &state); err != nil {
+	if len(decoded) > stateLimit {
+		return usersync.Snapshot{}, fmt.Errorf("estado remoto excede o limite de %d bytes", stateLimit)
+	}
+	if err := rejectDuplicateFields(decoded); err != nil {
 		return usersync.Snapshot{}, fmt.Errorf("JSON do estado remoto inválido: %w", err)
 	}
+
+	var state usersync.State
+	decoder := json.NewDecoder(bytes.NewReader(decoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&state); err != nil {
+		return usersync.Snapshot{}, fmt.Errorf("JSON do estado remoto inválido: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return usersync.Snapshot{}, errors.New("JSON do estado remoto contém dados adicionais")
+	}
+	if err := state.Validate(); err != nil {
+		return usersync.Snapshot{}, err
+	}
 	return usersync.Snapshot{State: state, Revision: payload.SHA}, nil
+}
+
+// rejectDuplicateFields percorre tokens antes do decode tipado. encoding/json
+// aceita a última ocorrência de uma chave repetida; num arquivo de estado
+// editável isso tornaria o valor efetivo diferente do que uma revisão visual
+// pode sugerir.
+func rejectDuplicateFields(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	var visit func() error
+	visit = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delimiter, composite := token.(json.Delim)
+		if !composite {
+			return nil
+		}
+		switch delimiter {
+		case '{':
+			seen := map[string]bool{}
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return errors.New("chave JSON não textual")
+				}
+				if seen[key] {
+					return fmt.Errorf("campo duplicado: %s", key)
+				}
+				seen[key] = true
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for decoder.More() {
+				if err := visit(); err != nil {
+					return err
+				}
+			}
+		default:
+			return errors.New("delimitador JSON inesperado")
+		}
+		_, err = decoder.Token()
+		return err
+	}
+	if err := visit(); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		if err == nil {
+			return errors.New("conteúdo adicional depois do documento")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Write(
@@ -163,6 +238,10 @@ func (s *Store) Write(
 	state usersync.State,
 	expected string,
 ) (string, error) {
+	state.Normalize()
+	if err := state.Validate(); err != nil {
+		return "", err
+	}
 	login, err := s.login(ctx, credential)
 	if err != nil {
 		return "", err

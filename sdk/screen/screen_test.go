@@ -2,6 +2,7 @@ package screen_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -233,6 +234,46 @@ func TestHandshakeIncompativelRespondeAntesDeSair(t *testing.T) {
 		t.Fatalf("initialized = %+v", initialized)
 	}
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "incompatível") {
+		t.Fatalf("erro = %v", err)
+	}
+}
+
+func TestFactoryWithErrorPreservaCausaDaComposicao(t *testing.T) {
+	toolInput, engineInput := io.Pipe()
+	engineOutput, toolOutput := io.Pipe()
+	want := errors.New("plataforma sem adapter")
+	done := make(chan error, 1)
+	go func() {
+		done <- screen.Run(context.Background(), screen.Config{
+			Protocol: protocol.VersionRange{Min: 1, Max: 1},
+			FactoryWithError: func(screen.Session) (screen.Model, error) {
+				return nil, want
+			},
+			Input: toolInput, Output: toolOutput,
+		})
+	}()
+	defer func() {
+		_ = engineInput.Close()
+		_ = engineOutput.Close()
+	}()
+	message, _ := protocol.NewMessage(1, 1, protocol.MethodInitialize,
+		protocol.Initialize{Protocol: protocol.VersionRange{Min: 1, Max: 1}})
+	if err := protocol.NewEncoder(engineInput).Write(message); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, want) {
+		t.Fatalf("erro = %v", err)
+	}
+}
+
+func TestRuntimeRecusaFactoriesAmbiguas(t *testing.T) {
+	err := screen.Run(context.Background(), screen.Config{
+		Factory: func(screen.Session) screen.Model { return &model{} },
+		FactoryWithError: func(screen.Session) (screen.Model, error) {
+			return &model{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "somente") {
 		t.Fatalf("erro = %v", err)
 	}
 }

@@ -111,9 +111,9 @@ func newHarness(connected bool) *harness {
 		tokens: &fakeTokens{},
 		remote: &fakeRemote{},
 		local: &fakeLocal{state: usersync.State{
-			Usage:   []usersync.ToolUsage{{ID: "git-dev-radar", Runs: 3, Favorite: true}},
+			Usage:   []usersync.ToolUsage{{Host: "lealing", ID: "example-tool", Runs: 3, Favorite: true}},
 			Sources: []usersync.MarketplaceSource{{Name: "meu-repo", Kind: "local", Ref: "/tmp/tools", Enabled: true}},
-			Tools:   []usersync.InstalledTool{{ID: "token-usage", Version: "1.0.1"}},
+			Tools:   []usersync.InstalledTool{{Host: "lealing", ID: "another-tool", Version: "1.0.1"}},
 		}},
 		settings: &fakeSettings{},
 	}
@@ -242,8 +242,8 @@ func TestPullAplicaSomenteAsSecoesLigadas(t *testing.T) {
 	h.remote.snapshot = usersync.Snapshot{
 		Revision: "remota",
 		State: usersync.State{
-			Version: usersync.StateVersion,
-			Usage:   []usersync.ToolUsage{{ID: "power-control", Runs: 9}},
+			Version: usersync.StateVersion, UpdatedAt: fixedNow(),
+			Usage:   []usersync.ToolUsage{{Host: "lealing", ID: "example-tool", Runs: 9}},
 			Sources: []usersync.MarketplaceSource{{Name: "outro", Kind: "remote", Ref: "https://x.test/i.json"}},
 		},
 	}
@@ -269,7 +269,7 @@ func TestPullRecusaEstadoDeVersaoFutura(t *testing.T) {
 		State:    usersync.State{Version: usersync.StateVersion + 1},
 	}
 	_, err := h.service.Pull(context.Background(), false)
-	if err == nil || !strings.Contains(err.Error(), "versão mais nova") {
+	if err == nil || !strings.Contains(err.Error(), "não suportado") {
 		t.Fatalf("Pull = %v", err)
 	}
 }
@@ -289,8 +289,8 @@ func TestPullDetectaMudancaLocalNaoEnviada(t *testing.T) {
 	h.remote.snapshot = usersync.Snapshot{
 		Revision: "mesma",
 		State: usersync.State{
-			Version: usersync.StateVersion,
-			Usage:   []usersync.ToolUsage{{ID: "outra-coisa", Runs: 1}},
+			Version: usersync.StateVersion, UpdatedAt: fixedNow(),
+			Usage: []usersync.ToolUsage{{Host: "lealing", ID: "outra-coisa", Runs: 1}},
 		},
 	}
 	if _, err := h.service.Pull(context.Background(), false); !errors.Is(err, usersync.ErrConflict) {
@@ -328,21 +328,37 @@ func TestLogoutEsqueceCredencialERevisao(t *testing.T) {
 
 func TestNormalizeProduzOrdemEstavel(t *testing.T) {
 	state := usersync.State{
-		Usage: []usersync.ToolUsage{{ID: "zulu"}, {ID: "alfa"}},
-		Tools: []usersync.InstalledTool{{ID: "zeta"}, {ID: "beta"}},
+		Usage: []usersync.ToolUsage{{Host: "zulu", ID: "tool"}, {Host: "alfa", ID: "tool"}},
+		Tools: []usersync.InstalledTool{{Host: "zeta", ID: "tool"}, {Host: "beta", ID: "tool"}},
 	}
 	state.Normalize()
-	if state.Usage[0].ID != "alfa" || state.Tools[0].ID != "beta" {
+	if state.Usage[0].Host != "alfa" || state.Tools[0].Host != "beta" {
 		t.Fatalf("ordem = %+v", state)
 	}
 }
 
 func TestValidateRecusaDocumentoIncoerente(t *testing.T) {
+	valid := func() usersync.State {
+		return usersync.State{Version: usersync.StateVersion, UpdatedAt: fixedNow()}
+	}
+	usageWithoutID := valid()
+	usageWithoutID.Usage = []usersync.ToolUsage{{Host: "lealing", ID: " "}}
+	usageWithoutHost := valid()
+	usageWithoutHost.Usage = []usersync.ToolUsage{{ID: "example-tool"}}
+	duplicateUsage := valid()
+	duplicateUsage.Usage = []usersync.ToolUsage{
+		{Host: "lealing", ID: "example-tool"}, {Host: "lealing", ID: "example-tool"},
+	}
+	sourceWithoutRef := valid()
+	sourceWithoutRef.Sources = []usersync.MarketplaceSource{{Name: "x", Kind: "remote"}}
+	duplicateSource := valid()
+	duplicateSource.Sources = []usersync.MarketplaceSource{
+		{Name: "x", Kind: "local", Ref: "/tmp/x"}, {Name: "x", Kind: "local", Ref: "/tmp/x"},
+	}
 	for name, state := range map[string]usersync.State{
-		"uso sem id":       {Usage: []usersync.ToolUsage{{ID: " "}}},
-		"uso duplicado":    {Usage: []usersync.ToolUsage{{ID: "a"}, {ID: "a"}}},
-		"origem sem ref":   {Sources: []usersync.MarketplaceSource{{Name: "x"}}},
-		"origem duplicada": {Sources: []usersync.MarketplaceSource{{Name: "x", Ref: "r"}, {Name: "x", Ref: "r"}}},
+		"uso sem id": usageWithoutID, "uso sem host": usageWithoutHost,
+		"uso duplicado": duplicateUsage, "origem sem ref": sourceWithoutRef,
+		"origem duplicada": duplicateSource,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := state.Validate(); err == nil {

@@ -48,7 +48,7 @@ builds:
 archives:
   - id: default
     # Sem a versão no nome: a release já identifica qual é, e um nome estável
-    # deixa o install.sh e o self-update montarem a URL sem consultar a API.
+    # deixa o install.sh e o atualizador montarem a URL sem consultar a API.
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz

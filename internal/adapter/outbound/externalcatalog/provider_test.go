@@ -58,13 +58,13 @@ func provider(root string, strict bool, reserved ...domain.ToolID) *externalcata
 	return externalcatalog.New(externalcatalog.Options{
 		Root: root, Categories: []domain.Category{{ID: "ai", Name: "IA"}},
 		Reserved: reserved, Target: toolmanifest.Target{OS: "darwin", Arch: "arm64"},
-		Strict: strict,
+		Strict: strict, DefaultHost: "example-host",
 	})
 }
 
 func TestDescobertaLeManifestSemExigirNemExecutarBinario(t *testing.T) {
 	root := t.TempDir()
-	dir := installManifest(t, root, "token-usage", "1.0.0", manifestTemplate)
+	dir := installManifest(t, root, "example-tool", "1.0.0", manifestTemplate)
 	// A ausência proposital do executável demonstra que descoberta não faz
 	// stat nem spawn; isso só será erro quando a tela for aberta.
 	if _, err := os.Stat(filepath.Join(dir, "tool-bin")); !os.IsNotExist(err) {
@@ -75,7 +75,25 @@ func TestDescobertaLeManifestSemExigirNemExecutarBinario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools) != 1 || tools[0].ID != "token-usage" || tools[0].Runtime == nil {
+	if len(tools) != 1 || tools[0].ID != "example-tool" || tools[0].Runtime == nil {
+		t.Fatalf("tools = %+v", tools)
+	}
+	if tools[0].Host != "example-host" {
+		t.Fatalf("host legado = %q", tools[0].Host)
+	}
+}
+
+func TestDescobertaPreservaHostPersistidoNaInstalacao(t *testing.T) {
+	root := t.TempDir()
+	dir := installManifest(t, root, "example-tool", "1.0.0", manifestTemplate)
+	if err := os.WriteFile(filepath.Join(dir, "host"), []byte("outro-host\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tools, _, err := provider(root, true).Provide(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Host != "outro-host" {
 		t.Fatalf("tools = %+v", tools)
 	}
 }
@@ -112,13 +130,13 @@ func TestToolDePlataformaIncompativelSome(t *testing.T) {
 
 func TestToolExternaNaoSobrescreveBuiltinReservada(t *testing.T) {
 	root := t.TempDir()
-	installManifest(t, root, "system-info", "1.0.0", manifestTemplate)
-	tools, _, err := provider(root, false, "system-info").Provide(context.Background())
+	installManifest(t, root, "example-tool", "1.0.0", manifestTemplate)
+	tools, _, err := provider(root, false, "example-tool").Provide(context.Background())
 	if err != nil || len(tools) != 0 {
 		t.Fatalf("tools=%+v err=%v", tools, err)
 	}
-	if _, _, err := provider(root, true, "system-info").Provide(context.Background()); err == nil {
-		t.Fatal("strict não reportou tentativa de sobrescrever builtin")
+	if _, _, err := provider(root, true, "example-tool").Provide(context.Background()); err == nil {
+		t.Fatal("strict não reportou tentativa de sobrescrever ID reservado")
 	}
 }
 

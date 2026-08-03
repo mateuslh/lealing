@@ -162,7 +162,7 @@ func TestQueryMatches(t *testing.T) {
 }
 
 func TestToolValidate(t *testing.T) {
-	valid := domain.Tool{ID: "a/b", Name: "b", Category: "a"}
+	valid := domain.Tool{Host: "example-host", ID: "a/b", Name: "b", Category: "a"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("tool válida rejeitada: %v", err)
 	}

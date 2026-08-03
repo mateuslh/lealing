@@ -43,14 +43,19 @@ type Session struct {
 
 type Factory func(Session) Model
 
+// FactoryWithError permite que composição e seleção de plataforma falhem com
+// uma causa explícita, sem devolver model nil nem usar panic.
+type FactoryWithError func(Session) (Model, error)
+
 type Config struct {
-	ToolVersion    string
-	Protocol       protocol.VersionRange
-	Capabilities   []string
-	Factory        Factory
-	Input          io.Reader
-	Output         io.Writer
-	MaxMessageSize int
+	ToolVersion      string
+	Protocol         protocol.VersionRange
+	Capabilities     []string
+	Factory          Factory
+	FactoryWithError FactoryWithError
+	Input            io.Reader
+	Output           io.Writer
+	MaxMessageSize   int
 }
 
 // HostResponseMsg é entregue ao Update quando a engine conclui uma ação
@@ -81,8 +86,11 @@ func Request(method string, params any) tea.Cmd {
 
 // Run ocupa stdin/stdout com o protocolo até shutdown ou cancelamento.
 func Run(ctx context.Context, config Config) error {
-	if config.Factory == nil {
+	if config.Factory == nil && config.FactoryWithError == nil {
 		return errors.New("screen.Factory é obrigatória")
+	}
+	if config.Factory != nil && config.FactoryWithError != nil {
+		return errors.New("configure somente Factory ou FactoryWithError")
 	}
 	if !config.Protocol.Valid() {
 		config.Protocol = protocol.VersionRange{Min: protocol.Version1, Max: protocol.Version1}
@@ -128,7 +136,16 @@ func Run(ctx context.Context, config Config) error {
 		return fmt.Errorf("protocolo incompatível: engine %d–%d; tool %d–%d", initialize.Protocol.Min, initialize.Protocol.Max, config.Protocol.Min, config.Protocol.Max)
 	}
 	capabilities := capabilityIntersection(config.Capabilities, initialize.Capabilities)
-	model := config.Factory(Session{Initialize: initialize, Version: version, Capabilities: capabilities})
+	session := Session{Initialize: initialize, Version: version, Capabilities: capabilities}
+	var model Model
+	if config.FactoryWithError != nil {
+		model, err = config.FactoryWithError(session)
+		if err != nil {
+			return fmt.Errorf("construir model screen-v1: %w", err)
+		}
+	} else {
+		model = config.Factory(session)
+	}
 	if model == nil {
 		return errors.New("screen.Factory devolveu model nil")
 	}
