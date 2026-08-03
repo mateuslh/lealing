@@ -27,6 +27,7 @@ const (
 type Model struct {
 	deps    tui.Deps
 	manager core.Manager
+	actions []Action
 
 	sections []core.Section
 	values   []core.Value
@@ -44,15 +45,32 @@ type Model struct {
 	success bool
 }
 
+// Action acrescenta à configuração um fluxo administrativo que não é um
+// valor editável. A tela continua sem conhecer capacidades concretas: o
+// composition root escolhe a seção, o texto e a factory do destino.
+type Action struct {
+	Section     string
+	Label       string
+	Description string
+	Value       string
+	Screen      tui.ScreenFactory
+}
+
+type entry struct {
+	value    core.Value
+	action   Action
+	isAction bool
+}
+
 var _ tui.Screen = (*Model)(nil)
 
-func New(deps tui.Deps, manager core.Manager) *Model {
+func New(deps tui.Deps, manager core.Manager, actions ...Action) *Model {
 	input := textinput.New()
 	input.Prompt = ""
 	input.CharLimit = 256
 
 	return &Model{
-		deps: deps, manager: manager, input: input,
+		deps: deps, manager: manager, actions: append([]Action(nil), actions...), input: input,
 		sections: core.Sections(), restarted: map[core.Key]bool{},
 	}
 }
@@ -127,6 +145,25 @@ func (m *Model) sectionFields() []core.Value {
 	return fields
 }
 
+func (m *Model) sectionEntries() []entry {
+	section, ok := m.currentSection()
+	if !ok {
+		return nil
+	}
+	entries := make([]entry, 0, len(m.values)+len(m.actions))
+	for _, value := range m.values {
+		if value.Section == section.ID {
+			entries = append(entries, entry{value: value})
+		}
+	}
+	for _, action := range m.actions {
+		if action.Section == section.ID {
+			entries = append(entries, entry{action: action, isAction: true})
+		}
+	}
+	return entries
+}
+
 func (m *Model) sectionInfo() []core.InfoRow {
 	section, ok := m.currentSection()
 	if !ok {
@@ -149,11 +186,19 @@ func (m *Model) currentSection() (core.Section, bool) {
 }
 
 func (m *Model) currentField() (core.Value, bool) {
-	fields := m.sectionFields()
-	if m.field < 0 || m.field >= len(fields) {
+	current, ok := m.currentEntry()
+	if !ok || current.isAction {
 		return core.Value{}, false
 	}
-	return fields[m.field], true
+	return current.value, true
+}
+
+func (m *Model) currentEntry() (entry, bool) {
+	entries := m.sectionEntries()
+	if m.field < 0 || m.field >= len(entries) {
+		return entry{}, false
+	}
+	return entries[m.field], true
 }
 
 // sectionCount conta os ajustes de uma seção, para a lista da esquerda dizer
@@ -167,6 +212,11 @@ func (m *Model) sectionCount(section core.Section) int {
 	}
 	for _, row := range m.info {
 		if row.Section == section.ID {
+			count++
+		}
+	}
+	for _, action := range m.actions {
+		if action.Section == section.ID {
 			count++
 		}
 	}

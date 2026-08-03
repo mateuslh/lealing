@@ -58,7 +58,7 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	case "left", "h", "shift+tab":
 		m.focus = zoneSections
 	case "right", "l", "tab":
-		if len(m.sectionFields()) > 0 {
+		if len(m.sectionEntries()) > 0 {
 			m.focus, m.field = zoneFields, 0
 		}
 
@@ -88,16 +88,23 @@ func (m *Model) handleKey(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 // activate abre a edição de um texto ou alterna um interruptor.
 func (m *Model) activate() (tui.Screen, tea.Cmd) {
 	if m.focus == zoneSections {
-		if len(m.sectionFields()) == 0 {
+		if len(m.sectionEntries()) == 0 {
 			return m, nil
 		}
 		m.focus, m.field = zoneFields, 0
 		return m, nil
 	}
-	value, ok := m.currentField()
+	current, ok := m.currentEntry()
 	if !ok {
 		return m, nil
 	}
+	if current.isAction {
+		if current.action.Screen == nil {
+			return m, nil
+		}
+		return m, tui.Navigate(current.action.Screen())
+	}
+	value := current.value
 
 	if value.Kind == core.KindToggle {
 		next := "true"
@@ -146,14 +153,14 @@ func (m *Model) move(delta int) {
 		m.field = 0
 		return
 	}
-	m.field = clamp(m.field+delta, len(m.sectionFields()))
+	m.field = clamp(m.field+delta, len(m.sectionEntries()))
 }
 
 // clampCursor recoloca os cursores depois de uma recarga que mudou as listas.
 func (m *Model) clampCursor() {
 	m.section = clamp(m.section, len(m.sections))
-	m.field = clamp(m.field, len(m.sectionFields()))
-	if len(m.sectionFields()) == 0 {
+	m.field = clamp(m.field, len(m.sectionEntries()))
+	if len(m.sectionEntries()) == 0 {
 		m.focus = zoneSections
 	}
 }

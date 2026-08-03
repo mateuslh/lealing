@@ -83,11 +83,15 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 		return ""
 	}
 	inner := width - 2
-	fields := m.sectionFields()
+	entries := m.sectionEntries()
 
 	lines := []string{th.Ghost.Render(component.TruncateTail(section.Description, inner)), ""}
-	for index, value := range fields {
-		lines = append(lines, m.viewField(th, value, index == m.field, inner)...)
+	for index, current := range entries {
+		if current.isAction {
+			lines = append(lines, m.viewAction(th, current.action, index == m.field, inner)...)
+			continue
+		}
+		lines = append(lines, m.viewField(th, current.value, index == m.field, inner)...)
 	}
 	for _, row := range m.sectionInfo() {
 		lines = append(lines, component.TruncateTail(
@@ -96,7 +100,7 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 				Width: inner, LabelWidth: 14,
 			}.Render(th), inner))
 	}
-	if len(fields) == 0 && len(m.sectionInfo()) == 0 {
+	if len(entries) == 0 && len(m.sectionInfo()) == 0 {
 		lines = append(lines, th.Ghost.Render("nada configurável aqui ainda"))
 	}
 	if message := m.viewFeedback(th, inner); message != "" {
@@ -111,6 +115,28 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 		Title: section.Name, Glyph: section.Glyph, Accent: th.Secondary,
 		Focused: m.focus == zoneFields, Footer: footer, Width: width, Height: height,
 	}.Render(th, strings.Join(lines, "\n"))
+}
+
+func (m *Model) viewAction(th *theme.Theme, action Action, selected bool, width int) []string {
+	caret := "  "
+	label := th.Item.Render(action.Label)
+	if selected {
+		label = th.ItemSelected.Render(action.Label)
+		if m.focus == zoneFields {
+			caret = lipgloss.NewStyle().Foreground(th.Secondary).Render("▎") + " "
+		}
+	}
+	value := action.Value
+	if value == "" {
+		value = "abrir →"
+	}
+	lines := []string{component.TruncateTail(
+		component.Spread(caret+label,
+			lipgloss.NewStyle().Foreground(th.Accent).Render(value), width), width)}
+	if selected {
+		lines = append(lines, wrap(th.Ghost, action.Description, width-4, 3), "")
+	}
+	return lines
 }
 
 // viewField desenha rótulo, valor e — abaixo, só no selecionado — a
@@ -190,7 +216,7 @@ func (m *Model) Hints() []tui.Hint {
 		}
 	}
 	return []tui.Hint{
-		{Key: "↑↓", Label: "ajuste"}, {Key: "↵", Label: "editar"},
+		{Key: "↑↓", Label: "item"}, {Key: "↵", Label: "abrir/editar"},
 		{Key: "r", Label: "padrão"}, {Key: "←", Label: "seções"},
 		{Key: "esc", Label: "voltar"},
 	}

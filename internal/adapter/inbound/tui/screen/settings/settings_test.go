@@ -231,6 +231,34 @@ func TestHintsIncluemEsc(t *testing.T) {
 	t.Fatal("hint esc ausente")
 }
 
+func TestAcaoAdministrativaAbreFluxoDaSecao(t *testing.T) {
+	target := func() tui.Screen { return stubScreen{} }
+	model := New(deps(), &fakeManager{values: values()}, Action{
+		Section: core.SectionAccount.ID, Label: "Sincronização", Screen: target,
+	})
+	next, _ := model.Update(model.reload()())
+	model = next.(*Model)
+	model, _ = update(t, model, tea.KeyMsg{Type: tea.KeyRight})
+	model, _ = update(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	_, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if command == nil {
+		t.Fatal("ação não navegou")
+	}
+	navigation, ok := command().(tui.NavigateMsg)
+	if !ok || navigation.Screen.ID() != "stub-settings-action" {
+		t.Fatalf("navegação = %#v", navigation)
+	}
+}
+
+type stubScreen struct{}
+
+func (stubScreen) ID() tui.ScreenID                       { return "stub-settings-action" }
+func (stubScreen) Title() string                          { return "stub" }
+func (stubScreen) Init() tea.Cmd                          { return nil }
+func (s stubScreen) Update(tea.Msg) (tui.Screen, tea.Cmd) { return s, nil }
+func (stubScreen) View(tui.Frame) string                  { return "" }
+func (stubScreen) Hints() []tui.Hint                      { return nil }
+
 func update(t *testing.T, model *Model, message tea.Msg) (*Model, tea.Cmd) {
 	t.Helper()
 	next, command := model.Update(message)

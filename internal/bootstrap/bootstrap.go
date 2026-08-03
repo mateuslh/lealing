@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	accountsyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/accountsync"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
@@ -143,6 +144,10 @@ func Wire(opts Options) (*App, error) {
 	marketplaceSvc := newMarketplaceManager(
 		opts.Version, indexURL, toolManager, repo, directories,
 	)
+	syncManager := newSyncManager(
+		opts.Version, directories, config, usageStore,
+		marketplaceSourceStore(directories), toolManager, repo,
+	)
 
 	var toolRunners []outbound.ToolRunner
 	launcher := service.NewLauncher(toolManagement, catalogSvc, clock, log, toolRunners...)
@@ -206,7 +211,15 @@ func Wire(opts Options) (*App, error) {
 		MarketplaceScreen: func() tui.Screen {
 			return marketplacescreen.New(deps, marketplaceSvc, toolManagement)
 		},
-		SettingsScreen: func() tui.Screen { return settingsscreen.New(deps, config) },
+		SettingsScreen: func() tui.Screen {
+			return settingsscreen.New(deps, config, settingsscreen.Action{
+				Section:     settings.SectionAccount.ID,
+				Label:       "Sincronização do GitHub",
+				Description: "Conecte sua conta, escolha o que pode sair da máquina e controle envios, downloads e conflitos.",
+				Value:       "gerenciar →",
+				Screen:      func() tui.Screen { return accountsyncscreen.New(deps, syncManager) },
+			})
+		},
 	})
 
 	app.ui = tui.NewApp(th, root)

@@ -11,12 +11,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	accountsyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/accountsync"
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
+	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
+	coresettings "github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/toolmanage"
+	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
 var frames = []tui.Frame{
@@ -72,6 +76,76 @@ func marketplace() tui.Screen {
 	return drain(model, model.Init())
 }
 
+type fakeSync struct{ status usersync.Status }
+
+func (f fakeSync) Status(context.Context) (usersync.Status, error) { return f.status, nil }
+func (fakeSync) StartLogin(context.Context) (usersync.DeviceCode, error) {
+	return usersync.DeviceCode{}, nil
+}
+func (fakeSync) CompleteLogin(context.Context, usersync.DeviceCode) (usersync.Identity, error) {
+	return usersync.Identity{}, nil
+}
+func (fakeSync) Logout(context.Context) error { return nil }
+func (fakeSync) Push(context.Context, bool) (usersync.Result, error) {
+	return usersync.Result{}, nil
+}
+func (fakeSync) Pull(context.Context, bool) (usersync.Result, error) {
+	return usersync.Result{}, nil
+}
+func (fakeSync) SetSection(context.Context, usersync.Section, bool) error { return nil }
+
+func syncStatus() usersync.Status {
+	return usersync.Status{
+		Connected: true, Identity: usersync.Identity{Login: "alguem", Name: "Alguém"},
+		Repository: "lealing-state", Selection: usersync.DefaultSelection(),
+		Local: usersync.State{
+			Usage:   []usersync.ToolUsage{{Host: "lealing", ID: "example-tool"}},
+			Sources: []usersync.MarketplaceSource{{Name: "example", Kind: "local", Ref: "/tmp/example"}},
+			Tools:   []usersync.InstalledTool{{Host: "lealing", ID: "another-tool", Version: "1.0.0"}},
+		},
+		Remote: usersync.State{Usage: []usersync.ToolUsage{{Host: "lealing", ID: "example-tool"}}},
+	}
+}
+
+func accountSync() tui.Screen {
+	model := tui.Screen(accountsyncscreen.New(
+		tui.Deps{Theme: theme.Default()}, fakeSync{status: syncStatus()},
+	))
+	return drain(model, model.Init())
+}
+
+type fakeSettings struct{ values []coresettings.Value }
+
+func (f fakeSettings) All() ([]coresettings.Value, error) { return f.values, nil }
+func (f fakeSettings) Get(key coresettings.Key) (coresettings.Value, error) {
+	for _, value := range f.values {
+		if value.Key == key {
+			return value, nil
+		}
+	}
+	return coresettings.Value{}, coresettings.ErrUnknownField
+}
+func (fakeSettings) Set(coresettings.Key, string) error { return nil }
+func (fakeSettings) Reset(coresettings.Key) error       { return nil }
+func (fakeSettings) Info() []coresettings.InfoRow       { return nil }
+
+func settings() tui.Screen {
+	fields := coresettings.Fields()
+	values := make([]coresettings.Value, 0, len(fields))
+	for _, field := range fields {
+		values = append(values, coresettings.Value{Field: field, Current: field.Default})
+	}
+	model := tui.Screen(settingsscreen.New(
+		tui.Deps{Theme: theme.Default()}, fakeSettings{values: values},
+		settingsscreen.Action{
+			Section: coresettings.SectionAccount.ID, Label: "Sincronização do GitHub",
+			Description: "Gerencie a conta e as preferências sincronizadas.",
+			Screen:      func() tui.Screen { return accountSync() },
+		},
+	))
+	return drain(model, model.Init())
+}
+
 func drain(model tui.Screen, command tea.Cmd) tui.Screen {
 	if command == nil {
 		return model
@@ -90,26 +164,34 @@ func drain(model tui.Screen, command tea.Cmd) tui.Screen {
 }
 
 func TestTelasAdministrativasNuncaEstouramOFrame(t *testing.T) {
-	for _, key := range []tea.Msg{
-		nil,
-		tea.KeyMsg{Type: tea.KeyTab},
-		tea.KeyMsg{Type: tea.KeyTab},
+	for name, factory := range map[string]func() tui.Screen{
+		"marketplace":   marketplace,
+		"configuração":  settings,
+		"sincronização": accountSync,
 	} {
-		for _, frame := range frames {
-			model := marketplace()
-			if key != nil {
-				model, _ = model.Update(key)
-			}
-			view := model.View(frame)
-			lines := strings.Split(view, "\n")
-			if len(lines) > frame.Height {
-				t.Fatalf("%dx%d: %d linhas", frame.Width, frame.Height, len(lines))
-			}
-			for row, line := range lines {
-				if width := lipgloss.Width(line); width > frame.Width {
-					t.Fatalf("%dx%d linha %d mede %d", frame.Width, frame.Height, row, width)
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []tea.Msg{
+				nil,
+				tea.KeyMsg{Type: tea.KeyTab},
+				tea.KeyMsg{Type: tea.KeyTab},
+			} {
+				for _, frame := range frames {
+					model := factory()
+					if key != nil {
+						model, _ = model.Update(key)
+					}
+					view := model.View(frame)
+					lines := strings.Split(view, "\n")
+					if len(lines) > frame.Height {
+						t.Fatalf("%dx%d: %d linhas", frame.Width, frame.Height, len(lines))
+					}
+					for row, line := range lines {
+						if width := lipgloss.Width(line); width > frame.Width {
+							t.Fatalf("%dx%d linha %d mede %d", frame.Width, frame.Height, row, width)
+						}
+					}
 				}
 			}
-		}
+		})
 	}
 }
