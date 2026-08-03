@@ -105,7 +105,7 @@ func (a *Applier) fromRelease(ctx context.Context, in core.Install, rel core.Rel
 	}
 	defer os.Remove(archive)
 
-	extracted, err := extractBinary(archive, a.binary, dir)
+	extracted, err := extractBinary(archive, asset, a.binary, dir)
 	if err != nil {
 		return core.Outcome{}, err
 	}
@@ -234,9 +234,10 @@ func (a *Applier) download(ctx context.Context, url, dir, wantSum string) (strin
 }
 
 // extractBinary tira o executável do arquivo compactado, devolvendo o caminho
-// do arquivo extraído dentro de dir.
-func extractBinary(archive, binary, dir string) (string, error) {
-	if strings.HasSuffix(strings.ToLower(archive), ".zip") {
+// do arquivo extraído dentro de dir. O formato vem do nome publicado porque o
+// download verificado fica num arquivo temporário deliberadamente sem extensão.
+func extractBinary(archive, asset, binary, dir string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(asset), ".zip") {
 		return extractFromZip(archive, binary, dir)
 	}
 	return extractFromTarGz(archive, binary, dir)

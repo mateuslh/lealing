@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -198,6 +199,46 @@ func TestApplyTrocaOBinario(t *testing.T) {
 	}
 }
 
+// TestApplyTrocaOBinarioDoWindows cobre a escolha do formato depois que o
+// download ganhou um nome temporário sem a extensão .zip do asset publicado.
+func TestApplyTrocaOBinarioDoWindows(t *testing.T) {
+	const novo = "binário windows novo"
+	archive := zipFile(t, "lealing.exe", novo)
+	asset := AssetName("lealing", "windows", "amd64")
+	srv := releaseServer(t, map[string][]byte{
+		asset: archive,
+		"checksums.txt": []byte(fmt.Sprintf("%s  %s\n",
+			sha256hex(archive), asset)),
+	})
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lealing.exe")
+	mustWrite(t, target, "binário windows velho")
+
+	applier := testApplier(srv.URL)
+	applier.target = Target{OS: "windows", Arch: "amd64"}
+	out, err := applier.Apply(context.Background(),
+		core.Install{Mode: core.ModeRelease, BinaryPath: target, Writable: true},
+		core.Release{Tag: "v1.4.0"})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if out.To != "v1.4.0" || !out.Restart {
+		t.Errorf("outcome = %+v, quero v1.4.0 com Restart", out)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != novo {
+		t.Errorf("conteúdo = %q, quero %q", got, novo)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("sobraram arquivos no diretório: %v", names(entries))
+	}
+}
+
 func TestApplyRecusaChecksumErrado(t *testing.T) {
 	if os.PathSeparator == '\\' {
 		t.Skip("o artefato do Windows é .zip; este teste monta um tar.gz")
@@ -288,6 +329,24 @@ func tarGz(t *testing.T, name, content string) []byte {
 		t.Fatal(err)
 	}
 	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.data
+}
+
+func zipFile(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf writeBuffer
+	zw := zip.NewWriter(&buf)
+
+	f, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.data
