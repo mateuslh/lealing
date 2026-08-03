@@ -65,8 +65,12 @@ func TestStoreAusenteEVaiEVoltaComFormatoIntegro(t *testing.T) {
 	}
 	for _, candidate := range []string{path, path + ".bak"} {
 		info, err := os.Stat(candidate)
-		if err != nil || info.Mode().Perm()&0o077 != 0 {
-			t.Fatalf("permissões de %s = %v, err=%v", candidate, info.Mode(), err)
+		if err != nil {
+			t.Fatalf("Stat %s: %v", candidate, err)
+		}
+		// O Windows não expõe bits POSIX de permissão por os.FileMode.
+		if filepath.Separator != '\\' && info.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("permissões de %s = %v", candidate, info.Mode())
 		}
 	}
 }

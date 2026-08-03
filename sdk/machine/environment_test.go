@@ -9,11 +9,19 @@ import (
 	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
+func hostPathPlatform() string {
+	// Os diretórios temporários seguem a sintaxe do host que executa o teste.
+	if filepath.Separator == '\\' {
+		return "windows"
+	}
+	return "linux"
+}
+
 func TestEnvironmentResolveCaminhosConcedidos(t *testing.T) {
 	home := t.TempDir()
 	data := filepath.Join(t.TempDir(), "data")
 	environment := machine.NewEnvironment(protocol.Initialize{
-		Platform: "darwin", HomeDir: home, DataDir: data,
+		Platform: hostPathPlatform(), HomeDir: home, DataDir: data,
 		Permissions: protocol.Permissions{Filesystem: protocol.FilesystemPermissions{
 			Read: []string{filepath.Join(home, ".codex", "sessions")},
 		}},

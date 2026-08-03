@@ -11,7 +11,10 @@ import (
 
 func TestFileSystemEscreveAtomicamenteNoDiretorioPrivado(t *testing.T) {
 	data := filepath.Join(t.TempDir(), "tool-data")
-	files := machine.NewEnvironment(protocol.Initialize{DataDir: data}).Files()
+	files := machine.NewEnvironment(protocol.Initialize{
+		Platform: hostPathPlatform(),
+		DataDir:  data,
+	}).Files()
 	name := filepath.Join(data, "nested", "state.json")
 
 	if err := files.WriteFileAtomic(name, []byte("primeiro"), 0o600); err != nil {
@@ -45,7 +48,10 @@ func TestFileSystemEscreveAtomicamenteNoDiretorioPrivado(t *testing.T) {
 }
 
 func TestFileSystemRecusaCaminhoForaDaConcessao(t *testing.T) {
-	files := machine.NewEnvironment(protocol.Initialize{DataDir: t.TempDir()}).Files()
+	files := machine.NewEnvironment(protocol.Initialize{
+		Platform: hostPathPlatform(),
+		DataDir:  t.TempDir(),
+	}).Files()
 	err := files.WriteFileAtomic(filepath.Join(t.TempDir(), "fora"), []byte("x"), 0o600)
 	if !errors.Is(err, machine.ErrPermissionDenied) {
 		t.Fatalf("erro = %v", err)
