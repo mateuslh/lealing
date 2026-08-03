@@ -116,6 +116,7 @@ runtime:
 ui:
   mode: screen-v1
   capabilities: [navigation.back, notification.show]
+  wantsMouse: false
 platforms:
   - darwin-arm64
   - windows-amd64
@@ -157,6 +158,7 @@ lealing -tool-validate ./dist/darwin-arm64
 | `runtime.executable` | Nome simples, relativo, sem diretório, espaço ou argumento. |
 | `ui.mode` | Na v1, exatamente `screen-v1`. |
 | `ui.capabilities` | Ações do host que a tool pode pedir. |
+| `ui.wantsMouse` | Opcional, padrão `false`. Veja §5.2. |
 | `platforms` | Lista não vazia de alvos publicados. |
 | `requirements` | Executáveis obrigatórios encontrados no `PATH`. |
 | `permissions` | Acesso real a disco, rede e subprocessos. |
@@ -381,6 +383,13 @@ O SDK normaliza eventos em mensagens Bubble Tea:
 Ao receber `ShutdownMsg`, atualize apenas estado necessário para encerramento.
 Persistência lenta continua precisando de estratégia explícita; não bloqueie o
 loop indefinidamente.
+
+Eventos de mouse só chegam se o manifest declarar `ui.wantsMouse: true`. Sem
+essa declaração — o padrão —, a engine não captura o mouse do terminal
+enquanto a tool roda, e o usuário pode selecionar texto da tela normalmente,
+como em qualquer programa de terminal. Só peça `wantsMouse` se a tool
+realmente interpreta clique, arraste ou roda; caso contrário você troca a
+seleção de texto do usuário por eventos que nunca são lidos.
 
 ## 6. Plataforma, arquivos e processos
 

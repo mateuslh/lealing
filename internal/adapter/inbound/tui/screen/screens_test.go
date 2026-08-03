@@ -14,9 +14,11 @@ import (
 	accountsyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/accountsync"
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
+	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
+	"github.com/mateuslh/lealing/internal/core/selfupdate"
 	coresettings "github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/toolmanage"
@@ -146,6 +148,28 @@ func settings() tui.Screen {
 	return drain(model, model.Init())
 }
 
+type fakeSelfUpdate struct {
+	status selfupdate.Status
+}
+
+func (f fakeSelfUpdate) Check(context.Context) (selfupdate.Status, error) { return f.status, nil }
+func (fakeSelfUpdate) Apply(context.Context, selfupdate.Status) (selfupdate.Outcome, error) {
+	return selfupdate.Outcome{}, nil
+}
+
+func updateScreen() tui.Screen {
+	status := selfupdate.Status{
+		Install: selfupdate.Install{Mode: selfupdate.ModeRelease, BinaryPath: "/opt/lealing/lealing", Writable: true},
+		Current: selfupdate.ParseVersion("v1.0.0"),
+		Latest:  selfupdate.Release{Tag: "v1.1.0", Notes: "Notas do último lançamento."},
+		State:   selfupdate.StateOutdated,
+	}
+	model := tui.Screen(updatescreen.New(
+		tui.Deps{Theme: theme.Default()}, fakeSelfUpdate{status: status}, "/home/alguem", nil,
+	))
+	return drain(model, model.Init())
+}
+
 func drain(model tui.Screen, command tea.Cmd) tui.Screen {
 	if command == nil {
 		return model
@@ -168,6 +192,7 @@ func TestTelasAdministrativasNuncaEstouramOFrame(t *testing.T) {
 		"marketplace":   marketplace,
 		"configuração":  settings,
 		"sincronização": accountSync,
+		"atualização":   updateScreen,
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, key := range []tea.Msg{

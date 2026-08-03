@@ -13,6 +13,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
+	"github.com/mateuslh/lealing/internal/core/selfupdate"
 )
 
 // Constantes de layout. São os pontos de quebra do design responsivo: cada
@@ -37,6 +38,11 @@ func (m *Model) View(f tui.Frame) string {
 	th := m.deps.Theme
 	if f.Width < 24 || f.Height < 6 {
 		return th.Ghost.Render("janela pequena demais")
+	}
+	if m.updatePrompt {
+		return component.ColorFrame{
+			Title: "LEALING / HOME", Width: f.Width, Height: f.Height,
+		}.Render(th, m.viewUpdatePrompt(th, f.Width-2, f.Height-2))
 	}
 
 	innerW, innerH := f.Width-2, f.Height-2
@@ -722,6 +728,15 @@ func (m *Model) searchEmptyMessage() string {
 
 // Hints implementa tui.Screen, em ordem de importância decrescente.
 func (m *Model) Hints() []tui.Hint {
+	if m.updatePrompt {
+		return []tui.Hint{
+			{Key: "↑↓", Label: "escolher"},
+			{Key: "↵", Label: "confirmar"},
+			{Key: "a", Label: "atualizar"},
+			{Key: "p", Label: "ignorar até a próxima"},
+			{Key: "i/esc", Label: "ignorar"},
+		}
+	}
 	if m.searching {
 		return []tui.Hint{
 			{Key: "↑↓", Label: "navegar"},
@@ -784,9 +799,73 @@ func (m *Model) Meta() []string {
 	}
 }
 
+// Badge acende o selo dourado da topbar quando o último release publicado é
+// mais novo que o que está rodando. Usa State, não CanApply: um clone do
+// fonte sempre "pode aplicar" um `git pull` mesmo sem nada de novo, e esse
+// selo é um aviso — só faz sentido aceso quando há de fato uma versão à
+// frente para contar.
+func (m *Model) Badge() string {
+	if m.updateStatus.State != selfupdate.StateOutdated {
+		return ""
+	}
+	th := m.deps.Theme
+	return lipgloss.NewStyle().
+		Foreground(th.OnPrimary).Background(th.Warning).Bold(true).Padding(0, 1).
+		Render("⇪ atualização disponível")
+}
+
+// viewUpdatePrompt desenha o aviso de atualização por cima da home. Ele só
+// aparece depois que a checagem — disparada em paralelo com o catálogo em
+// Init — responde, então nunca atrasa a primeira tela.
+//
+// As três opções são uma FieldList navegável, não uma linha de atalhos
+// apagada: é a mesma primitiva usada em toda a engine para uma escolha entre
+// poucos itens, com a linha selecionada em destaque total de contraste.
+func (m *Model) viewUpdatePrompt(th *theme.Theme, width, height int) string {
+	status := m.updateStatus
+	current := status.Current.Raw
+	if current == "" {
+		current = "?"
+	}
+	panelWidth := min(max(width-8, 44), 64)
+	inner := panelWidth - 2
+
+	lines := []string{
+		lipgloss.NewStyle().Foreground(th.Warning).Bold(true).Render("Atualização disponível"),
+		"",
+		fmt.Sprintf("%s  →  %s", current, status.Latest.Tag),
+	}
+	if notes := strings.TrimSpace(status.Latest.Notes); notes != "" {
+		summary, _, _ := strings.Cut(notes, "\n")
+		lines = append(lines, "", th.Dim.Render(component.TruncateTail(summary, inner)))
+	}
+	lines = append(lines, "", component.FieldList{
+		Rows: m.updatePromptRows(th), Width: inner, Selected: m.updatePromptCursor,
+		Focusable: true, Focused: true, LabelWidth: 24,
+	}.Render(th))
+	lines = append(lines, "", th.Dim.Render("↑↓ escolher  ·  ↵ confirmar  ·  esc ignorar"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	panel := component.Panel{
+		Title: "atualização", Glyph: "⇪", Accent: th.Warning, Focused: true,
+		Width: panelWidth, Height: min(lipgloss.Height(content)+2, height),
+	}.Render(th, content)
+	return component.Center(width, height, panel)
+}
+
+// updatePromptRows são as três opções do aviso, na mesma ordem das
+// constantes updatePromptUpdate/Skip/Ignore em update.go.
+func (m *Model) updatePromptRows(th *theme.Theme) []component.Row {
+	return []component.Row{
+		{Label: "Atualizar", Value: "troca o binário agora", Tone: th.Accent},
+		{Label: "Ignorar até a próxima", Value: "silencia até um release mais novo"},
+		{Label: "Ignorar", Value: "pergunta de novo na próxima abertura"},
+	}
+}
+
 // Capturing informa ao App que o teclado está sendo consumido por um campo
 // de texto — sem isso, teclar "q" durante a busca fecharia o programa.
-func (m *Model) Capturing() bool { return m.searching }
+func (m *Model) Capturing() bool { return m.searching || m.updatePrompt }
 
 // Compile-time: a home precisa continuar satisfazendo os contratos opcionais
 // que o App consulta por type assertion.
@@ -795,5 +874,6 @@ var (
 		Status() (string, lipgloss.TerminalColor)
 	} = (*Model)(nil)
 	_ interface{ Meta() []string }  = (*Model)(nil)
+	_ interface{ Badge() string }   = (*Model)(nil)
 	_ interface{ Capturing() bool } = (*Model)(nil)
 )

@@ -239,7 +239,7 @@ func TestAcaoAdministrativaAbreFluxoDaSecao(t *testing.T) {
 	next, _ := model.Update(model.reload()())
 	model = next.(*Model)
 	model, _ = update(t, model, tea.KeyMsg{Type: tea.KeyRight})
-	model, _ = update(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	// A ação vem antes dos campos na lista: já é o item selecionado ao entrar.
 	_, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if command == nil {
 		t.Fatal("ação não navegou")
@@ -247,6 +247,31 @@ func TestAcaoAdministrativaAbreFluxoDaSecao(t *testing.T) {
 	navigation, ok := command().(tui.NavigateMsg)
 	if !ok || navigation.Screen.ID() != "stub-settings-action" {
 		t.Fatalf("navegação = %#v", navigation)
+	}
+}
+
+// TestCapacidadeAparecePrimeiroEComDescricaoSempreVisivel garante que a
+// promessa da tela — capacidades antes de ajustes, contexto sem precisar
+// selecionar — continua valendo depois de qualquer mudança de layout.
+func TestCapacidadeAparecePrimeiroEComDescricaoSempreVisivel(t *testing.T) {
+	model := New(deps(), &fakeManager{values: values()}, Action{
+		Section: core.SectionAccount.ID, Glyph: "⇄", Label: "Sincronização",
+		Description: "descrição sempre visível", Value: "gerenciar",
+	})
+	next, _ := model.Update(model.reload()())
+	model = next.(*Model)
+
+	entries := model.sectionEntries()
+	if len(entries) == 0 || !entries[0].isAction {
+		t.Fatalf("a capacidade não veio primeiro: %+v", entries)
+	}
+
+	view := model.View(tui.Frame{Width: 120, Height: 28})
+	if !strings.Contains(view, "descrição sempre visível") {
+		t.Fatalf("a descrição da capacidade não apareceu sem seleção:\n%s", view)
+	}
+	if !strings.Contains(view, "⇄") {
+		t.Fatalf("o glifo da capacidade não apareceu:\n%s", view)
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/mateuslh/lealing/internal/core/interactive"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
+	"github.com/mateuslh/lealing/internal/core/selfupdate"
 )
 
 // zone é a região da home que detém o foco do teclado.
@@ -109,6 +110,20 @@ type Model struct {
 	marketplaceCatalog coremarket.Catalog
 	marketplaceLoading bool
 	marketplaceErr     error
+
+	updateManager        selfupdate.Manager
+	updateCheckHome      func() bool
+	updateStatus         selfupdate.Status
+	updateScreen         tui.ScreenFactory
+	updateSkippedVersion func() string
+	skipUpdateVersion    func(string) error
+	// updatePrompt mostra o aviso de atualização sobre a home, sem bloquear
+	// o carregamento: a checagem que o liga roda em paralelo com o catálogo.
+	updatePrompt bool
+	// updatePromptCursor é a opção selecionada no aviso — atualizar, ignorar
+	// até a próxima ou ignorar —, navegável pelas setas como qualquer lista
+	// da engine, e não só por atalho de letra.
+	updatePromptCursor int
 }
 
 // toast é uma mensagem efêmera na barra de status.
@@ -158,6 +173,20 @@ type Config struct {
 	GreetingName func() string
 	// MarketplaceOnHome decide se a vitrine consulta a rede ao carregar.
 	MarketplaceOnHome func() bool
+	// UpdateManager verifica o último release publicado. Opcional pelo mesmo
+	// motivo do Marketplace: a home sobe mesmo sem essa checagem.
+	UpdateManager selfupdate.Manager
+	// UpdateCheckOnHome decide se essa checagem acontece ao carregar.
+	UpdateCheckOnHome func() bool
+	// UpdateScreen constrói a tela de atualização sob demanda. O aviso de
+	// startup e a ação "atualizar" abrem o mesmo fluxo da configuração.
+	UpdateScreen tui.ScreenFactory
+	// UpdateSkippedVersion lê a tag que o usuário mandou ignorar no aviso.
+	// Vazio (ou nil) nunca casa com uma tag publicada, então nada é suprimido.
+	UpdateSkippedVersion func() string
+	// SkipUpdateVersion grava a tag ignorada, para o aviso não voltar antes
+	// de um release mais novo existir.
+	SkipUpdateVersion func(string) error
 }
 
 // New monta a home. Nada é carregado aqui — a primeira carga acontece em
@@ -174,24 +203,29 @@ func New(cfg Config) *Model {
 	}
 
 	return &Model{
-		deps:               cfg.Deps,
-		catalog:            cfg.Catalog,
-		prefs:              cfg.Prefs,
-		launch:             cfg.Launcher,
-		prereqs:            cfg.Prerequisites,
-		now:                now,
-		interactive:        cfg.Interactive,
-		hostActions:        cfg.HostActions,
-		marketplace:        cfg.Marketplace,
-		marketplaceScreen:  cfg.MarketplaceScreen,
-		settingsScreen:     cfg.SettingsScreen,
-		greetingName:       cfg.GreetingName,
-		marketplaceOnHome:  cfg.MarketplaceOnHome,
-		input:              in,
-		catByID:            map[domain.CategoryID]domain.Category{},
-		loading:            true,
-		marketplaceLoading: cfg.Marketplace != nil,
-		user:               fallbackUser(cfg.User),
+		deps:                 cfg.Deps,
+		catalog:              cfg.Catalog,
+		prefs:                cfg.Prefs,
+		launch:               cfg.Launcher,
+		prereqs:              cfg.Prerequisites,
+		now:                  now,
+		interactive:          cfg.Interactive,
+		hostActions:          cfg.HostActions,
+		marketplace:          cfg.Marketplace,
+		marketplaceScreen:    cfg.MarketplaceScreen,
+		settingsScreen:       cfg.SettingsScreen,
+		greetingName:         cfg.GreetingName,
+		marketplaceOnHome:    cfg.MarketplaceOnHome,
+		updateManager:        cfg.UpdateManager,
+		updateCheckHome:      cfg.UpdateCheckOnHome,
+		updateScreen:         cfg.UpdateScreen,
+		updateSkippedVersion: cfg.UpdateSkippedVersion,
+		skipUpdateVersion:    cfg.SkipUpdateVersion,
+		input:                in,
+		catByID:              map[domain.CategoryID]domain.Category{},
+		loading:              true,
+		marketplaceLoading:   cfg.Marketplace != nil,
+		user:                 fallbackUser(cfg.User),
 		// Abre com o foco em "sugeridas": é o único painel garantidamente
 		// preenchido na primeira execução, e focar a sidebar de saída
 		// esmaeceria o espectro inteiro menos uma categoria.
@@ -211,11 +245,17 @@ func (m *Model) Init() tea.Cmd {
 	if m.marketplaceEnabled() {
 		cmds = append(cmds, m.loadMarketplace())
 	}
+	if m.updateCheckEnabled() {
+		cmds = append(cmds, m.checkUpdate())
+	}
 	return tea.Batch(cmds...)
 }
 
 // Refresh implementa o contrato opcional do App. Não repete o tick: o relógio
 // da home nunca parou, e um segundo ticker faria o toast expirar cedo demais.
+// Também não repete a verificação de atualização: ela muda no ritmo de um
+// release, não a cada volta à home, e refazê-la a cada esc só gastaria a
+// cota de requisições da API do GitHub sem nenhum ganho.
 func (m *Model) Refresh() tea.Cmd {
 	cmds := []tea.Cmd{m.loadCatalog()}
 	if m.marketplaceEnabled() {
@@ -262,6 +302,14 @@ type catalogMsg struct {
 type marketplaceMsg struct {
 	catalog coremarket.Catalog
 	err     error
+}
+
+// updateMsg entrega o resultado da checagem de atualização. Um erro é
+// silencioso na home — a checagem é conveniência, não algo que o usuário
+// veio resolver aqui — e por isso a mensagem não carrega err adiante do
+// Update: falhar em verificar só deixa o selo de fora deste render.
+type updateMsg struct {
+	status selfupdate.Status
 }
 
 // resultsMsg traz o resultado de uma busca, carimbado com a geração.
@@ -377,6 +425,53 @@ func (m *Model) loadMarketplace() tea.Cmd {
 		defer cancel()
 		catalog, err := manager.Catalog(ctx)
 		return marketplaceMsg{catalog: catalog, err: err}
+	}
+}
+
+// updateCheckEnabled informa se a checagem de atualização pode falar com a
+// rede. Mesmo desenho de marketplaceEnabled: nulo por padrão liga, e quem
+// desligou na configuração é respeitado sem a home saber por quê.
+func (m *Model) updateCheckEnabled() bool {
+	return m.updateManager != nil && (m.updateCheckHome == nil || m.updateCheckHome())
+}
+
+// checkUpdate consulta o último release publicado fora da thread de render.
+// Silenciar o erro aqui — e não só não propagá-lo — é deliberado: a home não
+// tem onde mostrá-lo sem competir com o catálogo, e "não verificou" já é o
+// que a ausência do selo diz sozinha.
+func (m *Model) checkUpdate() tea.Cmd {
+	manager := m.updateManager
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		status, err := manager.Check(ctx)
+		if err != nil {
+			return updateMsg{}
+		}
+		return updateMsg{status: status}
+	}
+}
+
+// updateSkipped informa se a tag já foi ignorada num aviso anterior — a
+// própria que se está prestes a mostrar de novo, ou uma velha, caso o
+// gerenciador tenha voltado a apontar uma versão que já foi recusada.
+func (m *Model) updateSkipped(tag string) bool {
+	return tag != "" && m.updateSkippedVersion != nil && m.updateSkippedVersion() == tag
+}
+
+// updateSkippedMsg confirma que a escolha de ignorar uma versão foi gravada.
+type updateSkippedMsg struct{ err error }
+
+// skipUpdate grava a tag para o aviso não voltar antes de um release mais
+// novo existir. A escrita é local e rápida, mas ainda assim só acontece
+// dentro de um Cmd — nenhuma porta é chamada de dentro de Update.
+func (m *Model) skipUpdate(tag string) tea.Cmd {
+	skip := m.skipUpdateVersion
+	return func() tea.Msg {
+		if skip == nil {
+			return updateSkippedMsg{}
+		}
+		return updateSkippedMsg{err: skip(tag)}
 	}
 }
 

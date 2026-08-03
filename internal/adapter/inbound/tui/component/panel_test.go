@@ -120,6 +120,42 @@ func TestStatusbarNuncaExcedeALargura(t *testing.T) {
 	}
 }
 
+func TestTopbarComBadgeNuncaExcedeALargura(t *testing.T) {
+	th := theme.Default()
+	badge := lipgloss.NewStyle().
+		Foreground(th.OnPrimary).Background(th.Warning).Bold(true).Padding(0, 1).
+		Render("⇪ atualização disponível")
+
+	for _, w := range []int{20, 40, 60, 80, 120, 200} {
+		bar := component.Topbar{
+			Trail: []string{"home", "configuração"},
+			Meta:  []string{"1 alterados"},
+			Badge: badge,
+		}.Render(th, w)
+
+		for i, line := range strings.Split(bar, "\n") {
+			if got := lipgloss.Width(line); got > w {
+				t.Errorf("largura %d: linha %d tem %d colunas\n%q", w, i, got, stripANSI(line))
+			}
+		}
+	}
+
+	// Com espaço de sobra o selo precisa aparecer inteiro, não só sobreviver
+	// ao corte de uma janela apertada.
+	wide := component.Topbar{Trail: []string{"home"}, Badge: badge}.Render(th, 120)
+	if !strings.Contains(stripANSI(wide), "atualização disponível") {
+		t.Errorf("o selo não apareceu com largura de sobra:\n%q", stripANSI(wide))
+	}
+}
+
+func TestTopbarSemBadgeNaoAlteraOLayout(t *testing.T) {
+	th := theme.Default()
+	bar := component.Topbar{Trail: []string{"home"}, Meta: []string{"6 tools"}}.Render(th, 80)
+	if strings.Contains(stripANSI(bar), "  ·  ·  ") {
+		t.Errorf("separador dobrado sem selo:\n%q", stripANSI(bar))
+	}
+}
+
 // stripANSI remove as sequências de escape para que a mensagem de falha
 // mostre o texto e não o código de cor.
 func stripANSI(s string) string {

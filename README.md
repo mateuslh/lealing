@@ -200,7 +200,13 @@ vence o valor do build.
 | **Conta** | Client ID do OAuth App usado no login |
 | **Marketplace** | URL do índice padrão e se a home consulta as origens ao abrir |
 | **Aparência** | Nome usado na saudação da home |
-| **Ambiente** | Versão e os caminhos onde a engine guarda config, dados, cache e tools |
+| **Ambiente** | Os caminhos onde a engine guarda config, dados, cache e tools |
+| **Atualizações** | Versão em execução, se a home verifica ao abrir e a versão que você mandou ignorar |
+
+**Conta** e **Atualizações** também abrem uma tela dedicada (`gerenciar →`): a
+primeira leva à sincronização com o GitHub (veja
+[Conta e sincronização](#conta-e-sincronização)) e a segunda à checagem e
+troca de versão da engine (veja [Atualização](#atualização)).
 
 `↑↓` percorre, `→` entra nos ajustes, `↵` edita (ou alterna um interruptor) e
 `r` volta ao padrão. Cada campo mostra de onde veio o valor em vigor —
@@ -328,6 +334,21 @@ bater**; o `--ff-only` nunca faz merge automático em um clone com trabalho
 local; e a troca do executável é um rename no mesmo volume, então ou você fica
 com o binário novo, ou com o antigo — nunca com um pela metade.
 
+Na TUI, a mesma checagem acontece sem sair do programa: `c` → **Atualizações**
+→ `gerenciar →` mostra a versão instalada frente à última publicada e aplica
+a troca com uma confirmação explícita.
+
+A home também verifica sozinha ao abrir, sem atrasar a primeira tela: a
+checagem roda em paralelo com o carregamento do catálogo, então você já está
+navegando quando a resposta chega. Se houver uma versão mais nova, um selo
+"⇪ atualização disponível" acende na topbar e um aviso aparece com três
+opções — navegáveis pela seta ou por atalho: **atualizar** (abre a tela
+acima), **ignorar até a próxima** (grava a versão em "Atualizações → Versão
+ignorada" e só volta a perguntar quando sair um release mais novo) e
+**ignorar** (fecha por agora; a home pergunta de novo na próxima abertura).
+Desligue "Verificar atualização na home" se preferir nunca ser interrompido —
+a checagem continua disponível a qualquer momento em **Atualizações**.
+
 O trabalho normal termina em editar, commitar e dar push. Quando for hora de
 publicar, um mantenedor ou agente apenas solicita a versão:
 
@@ -450,6 +471,14 @@ A busca aceita filtros inline combináveis com texto livre:
 
 Dentro de uma tool, a barra de status lista os atalhos publicados pelo próprio
 processo externo.
+
+O mouse fica livre para o terminal: dá para selecionar e copiar texto de
+qualquer tela normalmente, como em qualquer programa de linha de comando. Só
+quando uma tool realmente usa mouse — e declara isso no próprio manifest
+(`ui.wantsMouse: true`, veja o
+[guia de desenvolvimento de tools](docs/tool-development.md)) — a engine
+passa a capturar clique, arraste e roda para repassar à tool enquanto ela
+estiver aberta; ao sair dela, a seleção nativa volta.
 
 ## Arquitetura
 

@@ -237,7 +237,10 @@ Regras do manifest:
 - requisitos de `PATH` contêm somente `executable`, `name` e `installHint`;
 - risco e permissões descrevem o comportamento real;
 - plataformas e intervalo de protocolo são explícitos;
-- a engine não infere suporte, permissão ou requisito ausente.
+- a engine não infere suporte, permissão ou requisito ausente;
+- `ui.wantsMouse` é opcional e falso por padrão — só declare `true` se a tool
+  de fato interpreta clique, arraste ou roda; sem a declaração, a engine não
+  captura o mouse do terminal e o usuário mantém a seleção nativa de texto.
 
 O model implementa `screen.Model`. `stdout` pertence exclusivamente ao framing
 `Content-Length`; logs vão para stderr. Ações do host usam `screen.Request` e

@@ -21,10 +21,12 @@ import (
 type Key string
 
 const (
-	KeyGitHubClientID    Key = "github.client_id"
-	KeyGreetingName      Key = "home.greeting_name"
-	KeyMarketplaceIndex  Key = "marketplace.index_url"
-	KeyMarketplaceOnHome Key = "marketplace.check_on_home"
+	KeyGitHubClientID       Key = "github.client_id"
+	KeyGreetingName         Key = "home.greeting_name"
+	KeyMarketplaceIndex     Key = "marketplace.index_url"
+	KeyMarketplaceOnHome    Key = "marketplace.check_on_home"
+	KeyUpdateCheckOnHome    Key = "update.check_on_home"
+	KeyUpdateSkippedVersion Key = "update.skipped_version"
 )
 
 // Kind decide como a tela edita o campo.
@@ -50,11 +52,12 @@ var (
 	SectionMarketplace = Section{ID: "marketplace", Name: "Marketplace", Glyph: "✦", Description: "de onde as tools vêm"}
 	SectionAppearance  = Section{ID: "appearance", Name: "Aparência", Glyph: "◈", Description: "como a home se apresenta"}
 	SectionEnvironment = Section{ID: "environment", Name: "Ambiente", Glyph: "⌬", Description: "onde a engine guarda as coisas"}
+	SectionUpdates     = Section{ID: "updates", Name: "Atualizações", Glyph: "⇪", Description: "versão da engine e quando trocá-la"}
 )
 
 // Sections é a ordem em que aparecem na tela.
 func Sections() []Section {
-	return []Section{SectionAccount, SectionMarketplace, SectionAppearance, SectionEnvironment}
+	return []Section{SectionAccount, SectionMarketplace, SectionAppearance, SectionEnvironment, SectionUpdates}
 }
 
 // Field descreve um ajuste.
@@ -101,6 +104,18 @@ func Fields() []Field {
 			Label:       "Consultar origens na home",
 			Description: "Desligue para a home não falar com a rede ao abrir. A vitrine passa a consultar só quando você pedir.",
 			Kind:        KindToggle, Default: "true",
+		},
+		{
+			Key: KeyUpdateCheckOnHome, Section: SectionUpdates.ID,
+			Label:       "Verificar atualização na home",
+			Description: "Desligue para a home não consultar o GitHub ao abrir. A verificação passa a acontecer só quando você abrir “Atualizar o lealing”.",
+			Kind:        KindToggle, Default: "true",
+		},
+		{
+			Key: KeyUpdateSkippedVersion, Section: SectionUpdates.ID,
+			Label:       "Versão ignorada",
+			Description: "Tag do release que você mandou ignorar no aviso da home. Apague para voltar a ser avisado dela.",
+			Kind:        KindText, Placeholder: "vX.Y.Z",
 		},
 		{
 			Key: KeyGreetingName, Section: SectionAppearance.ID,

@@ -88,7 +88,7 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 	lines := []string{th.Ghost.Render(component.TruncateTail(section.Description, inner)), ""}
 	for index, current := range entries {
 		if current.isAction {
-			lines = append(lines, m.viewAction(th, current.action, index == m.field, inner)...)
+			lines = append(lines, m.viewAction(th, current.action, index == m.field, m.focus == zoneFields, inner)...)
 			continue
 		}
 		lines = append(lines, m.viewField(th, current.value, index == m.field, inner)...)
@@ -108,6 +108,9 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 	}
 
 	footer := "↵ editar · r padrão"
+	if current, ok := m.currentEntry(); ok && current.isAction {
+		footer = "↵ abrir"
+	}
 	if m.editing {
 		footer = "↵ salvar · esc cancelar"
 	}
@@ -117,26 +120,41 @@ func (m *Model) viewFields(th *theme.Theme, width, height int) string {
 	}.Render(th, strings.Join(lines, "\n"))
 }
 
-func (m *Model) viewAction(th *theme.Theme, action Action, selected bool, width int) []string {
+// viewAction desenha uma capacidade administrativa como um cartão, não como
+// mais uma linha da lista: glifo próprio, chamada em forma de selo e a
+// descrição sempre visível — nunca só depois de selecionada — porque é
+// abrindo mão desse contexto que a capacidade se confunde com um ajuste
+// qualquer e passa despercebida.
+func (m *Model) viewAction(th *theme.Theme, action Action, selected, focused bool, width int) []string {
+	glyph := action.Glyph
+	if glyph == "" {
+		glyph = "→"
+	}
 	caret := "  "
-	label := th.Item.Render(action.Label)
+	label := th.Item.Render(glyph + " " + action.Label)
 	if selected {
-		label = th.ItemSelected.Render(action.Label)
-		if m.focus == zoneFields {
-			caret = lipgloss.NewStyle().Foreground(th.Secondary).Render("▎") + " "
+		label = th.ItemSelected.Render(glyph + " " + action.Label)
+		if focused {
+			caret = lipgloss.NewStyle().Foreground(th.Primary).Render("▎") + " "
 		}
 	}
+
 	value := action.Value
 	if value == "" {
-		value = "abrir →"
+		value = "abrir"
 	}
-	lines := []string{component.TruncateTail(
-		component.Spread(caret+label,
-			lipgloss.NewStyle().Foreground(th.Accent).Render(value), width), width)}
-	if selected {
-		lines = append(lines, wrap(th.Ghost, action.Description, width-4, 3), "")
+	badge := th.Pill.Render(value)
+	if selected && focused {
+		badge = lipgloss.NewStyle().
+			Foreground(th.OnPrimary).Background(th.Primary).Bold(true).Padding(0, 1).
+			Render(value)
 	}
-	return lines
+
+	lines := []string{component.TruncateTail(component.Spread(caret+label, badge, width), width)}
+	if description := wrap(th.Ghost, action.Description, width-4, 2); description != "" {
+		lines = append(lines, description)
+	}
+	return append(lines, "")
 }
 
 // viewField desenha rótulo, valor e — abaixo, só no selecionado — a

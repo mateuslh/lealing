@@ -20,6 +20,9 @@ type (
 	}
 	// metaProvider alimenta os números da topbar.
 	metaProvider interface{ Meta() []string }
+	// badgeProvider alimenta o selo de destaque da topbar — um aviso pontual
+	// que precisa de cor própria, e não do tom neutro que Meta sempre usa.
+	badgeProvider interface{ Badge() string }
 	// inputCapturer avisa que o teclado está preso em um campo de texto.
 	inputCapturer interface{ Capturing() bool }
 	// refresher pede para recarregar seus dados ao voltar ao topo da pilha.
@@ -172,7 +175,11 @@ func (a *App) View() string {
 	if p, ok := current.(metaProvider); ok {
 		meta = p.Meta()
 	}
-	top := component.Topbar{Trail: a.router.Trail(), Meta: meta}.Render(a.theme, a.width)
+	var badge string
+	if p, ok := current.(badgeProvider); ok {
+		badge = p.Badge()
+	}
+	top := component.Topbar{Trail: a.router.Trail(), Meta: meta, Badge: badge}.Render(a.theme, a.width)
 
 	body := current.View(frame)
 	if a.showHelp {

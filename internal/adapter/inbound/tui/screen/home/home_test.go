@@ -19,6 +19,7 @@ import (
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
+	"github.com/mateuslh/lealing/internal/core/selfupdate"
 	"github.com/mateuslh/lealing/internal/core/service"
 	"github.com/mateuslh/lealing/internal/core/toolinstall"
 )
@@ -872,5 +873,223 @@ func TestConfiguracaoMudaSaudacaoEConsultaSemReiniciar(t *testing.T) {
 	consulta = true
 	if !m.marketplaceEnabled() {
 		t.Fatal("a vitrine não voltou a consultar quando religada")
+	}
+}
+
+// fakeSelfUpdate alimenta o selo de atualização sem rede.
+type fakeSelfUpdate struct{ status selfupdate.Status }
+
+func (f fakeSelfUpdate) Check(context.Context) (selfupdate.Status, error) { return f.status, nil }
+func (fakeSelfUpdate) Apply(context.Context, selfupdate.Status) (selfupdate.Outcome, error) {
+	return selfupdate.Outcome{}, nil
+}
+
+func TestSeloDeAtualizacaoAcendeQuandoDesatualizado(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+
+	if badge := m.Badge(); badge != "" {
+		t.Fatalf("o selo acendeu antes da checagem: %q", badge)
+	}
+	m = apply(t, m, m.checkUpdate())
+	if badge := m.Badge(); !strings.Contains(badge, "atualização") {
+		t.Fatalf("o selo não acendeu com atualização disponível: %q", badge)
+	}
+}
+
+func TestSeloDeAtualizacaoFicaApagadoEmDia(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{State: selfupdate.StateUpToDate}}
+	m = apply(t, m, m.checkUpdate())
+	if badge := m.Badge(); badge != "" {
+		t.Fatalf("o selo acendeu numa engine em dia: %q", badge)
+	}
+}
+
+// Um clone do fonte sempre "pode aplicar" um git pull, mesmo sem nada de
+// novo publicado — é assim que CanApply() foi desenhado para a tela de
+// atualização. O selo da home não pode usar esse sinal, senão fica aceso o
+// tempo todo em qualquer máquina de quem desenvolve o lealing.
+func TestSeloDeAtualizacaoIgnoraCloneSemVersaoComparavel(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State:   selfupdate.StateUnknown,
+		Install: selfupdate.Install{Mode: selfupdate.ModeSource},
+	}}
+	m = apply(t, m, m.checkUpdate())
+	if badge := m.Badge(); badge != "" {
+		t.Fatalf("o selo acendeu num clone sem versão comparável: %q", badge)
+	}
+}
+
+func TestSeloDeAtualizacaoAusenteSemGerenciador(t *testing.T) {
+	m := newTestModel(t)
+	if badge := m.Badge(); badge != "" {
+		t.Fatalf("o selo apareceu sem checagem configurada: %q", badge)
+	}
+}
+
+// A checagem de atualização roda em paralelo com o catálogo (veja Init) —
+// este teste confere que o resultado só chega depois, nunca atrasando a
+// primeira carga da home.
+func TestChecagemDeAtualizacaoNaoBloqueiaOInitDaHome(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+
+	if m.updatePrompt {
+		t.Fatal("o aviso apareceu antes de qualquer checagem responder")
+	}
+	if m.highlights.TotalTools == 0 {
+		t.Fatal("a home deveria já estar carregada quando a checagem começa")
+	}
+}
+
+func TestAvisoDeAtualizacaoAcendeQuandoDesatualizado(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+	m = apply(t, m, m.checkUpdate())
+	if !m.updatePrompt {
+		t.Fatal("o aviso não acendeu com atualização disponível")
+	}
+	if !m.Capturing() {
+		t.Fatal("o aviso aberto deveria capturar o teclado")
+	}
+	if !strings.Contains(m.View(tui.Frame{Width: 100, Height: 30}), "v9.9.9") {
+		t.Fatal("o aviso não mostrou a versão publicada")
+	}
+}
+
+func TestAtualizarNoAvisoNavegaParaATelaDeAtualizacao(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+	m.updateScreen = func() tui.Screen { return stubScreen{} }
+	m = apply(t, m, m.checkUpdate())
+
+	m, cmd := press(t, m, "a")
+	if m.updatePrompt {
+		t.Fatal("o aviso deveria fechar ao escolher atualizar")
+	}
+	if cmd == nil {
+		t.Fatal("atualizar não produziu navegação")
+	}
+	if nav, ok := cmd().(tui.NavigateMsg); !ok || nav.Screen.ID() != "stub" {
+		t.Fatalf("atualizar devolveu %T", cmd())
+	}
+}
+
+// As opções também navegam pela seta, e não só pelo atalho de letra.
+func TestAvisoDeAtualizacaoNavegaPelaSeta(t *testing.T) {
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+	m.updateScreen = func() tui.Screen { return stubScreen{} }
+	m = apply(t, m, m.checkUpdate())
+
+	if m.updatePromptCursor != updatePromptUpdate {
+		t.Fatalf("cursor inicial = %d, quero updatePromptUpdate", m.updatePromptCursor)
+	}
+
+	m, _ = press(t, m, "down")
+	if m.updatePromptCursor != updatePromptSkip {
+		t.Fatalf("down não moveu para updatePromptSkip: cursor = %d", m.updatePromptCursor)
+	}
+
+	m, _ = press(t, m, "down")
+	if m.updatePromptCursor != updatePromptIgnore {
+		t.Fatalf("down não moveu para updatePromptIgnore: cursor = %d", m.updatePromptCursor)
+	}
+
+	// O cursor não passa da última opção.
+	m, _ = press(t, m, "down")
+	if m.updatePromptCursor != updatePromptIgnore {
+		t.Fatalf("down além do fim moveu o cursor: %d", m.updatePromptCursor)
+	}
+
+	m, cmd := press(t, m, "enter")
+	if m.updatePrompt {
+		t.Fatal("confirmar pela seta deveria fechar o aviso")
+	}
+	if cmd != nil {
+		t.Fatal("confirmar em updatePromptIgnore não deveria produzir comando")
+	}
+}
+
+func TestIgnorarFechaOAvisoSemGravarNada(t *testing.T) {
+	gravado := ""
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+	m.skipUpdateVersion = func(tag string) error { gravado = tag; return nil }
+	m = apply(t, m, m.checkUpdate())
+
+	m, cmd := press(t, m, "i")
+	if m.updatePrompt {
+		t.Fatal("o aviso deveria fechar ao ignorar")
+	}
+	if cmd != nil {
+		t.Fatal("ignorar não deveria gravar nada")
+	}
+	if gravado != "" {
+		t.Fatalf("ignorar gravou %q, e não deveria gravar versão nenhuma", gravado)
+	}
+}
+
+func TestIgnorarAteAProximaGravaAVersaoESuprimeOMesmoAviso(t *testing.T) {
+	skipped := ""
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v9.9.9"},
+	}}
+	m.skipUpdateVersion = func(tag string) error { skipped = tag; return nil }
+	m.updateSkippedVersion = func() string { return skipped }
+	m = apply(t, m, m.checkUpdate())
+
+	m, cmd := press(t, m, "p")
+	if m.updatePrompt {
+		t.Fatal("o aviso deveria fechar ao ignorar até a próxima")
+	}
+	m = apply(t, m, cmd)
+	if skipped != "v9.9.9" {
+		t.Fatalf("a versão ignorada = %q, quero v9.9.9", skipped)
+	}
+
+	// A mesma tag não volta a interromper — a checagem seguinte é silenciosa.
+	m = apply(t, m, m.checkUpdate())
+	if m.updatePrompt {
+		t.Fatal("o aviso voltou para uma versão já ignorada")
+	}
+
+	// Mas uma tag mais nova ainda interrompe: ignorar não é silenciar para sempre.
+	m.updateManager = fakeSelfUpdate{status: selfupdate.Status{
+		State: selfupdate.StateOutdated, Latest: selfupdate.Release{Tag: "v10.0.0"},
+	}}
+	m = apply(t, m, m.checkUpdate())
+	if !m.updatePrompt {
+		t.Fatal("uma versão nova, nunca ignorada, deveria acender o aviso")
+	}
+}
+
+func TestChecagemDeAtualizacaoRespeitaOInterruptor(t *testing.T) {
+	checar := false
+	m := newTestModel(t)
+	m.updateManager = fakeSelfUpdate{}
+	m.updateCheckHome = func() bool { return checar }
+
+	if m.updateCheckEnabled() {
+		t.Fatal("a checagem rodou com o interruptor desligado")
+	}
+	checar = true
+	if !m.updateCheckEnabled() {
+		t.Fatal("a checagem não voltou a rodar quando religada")
 	}
 }

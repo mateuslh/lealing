@@ -49,7 +49,10 @@ type Model struct {
 // valor editável. A tela continua sem conhecer capacidades concretas: o
 // composition root escolhe a seção, o texto e a factory do destino.
 type Action struct {
-	Section     string
+	Section string
+	// Glyph identifica a capacidade na lista, do mesmo jeito que uma seção se
+	// identifica na barra lateral. Vazio cai no glifo genérico de navegação.
+	Glyph       string
 	Label       string
 	Description string
 	Value       string
@@ -145,20 +148,24 @@ func (m *Model) sectionFields() []core.Value {
 	return fields
 }
 
+// sectionEntries lista capacidades antes de campos. É o oposto da ordem de
+// declaração porque é o oposto da importância: um fluxo administrativo como a
+// sincronização ou a atualização é o que essa seção tem de mais relevante, e
+// enterrado depois de um punhado de ajustes é como ele passa despercebido.
 func (m *Model) sectionEntries() []entry {
 	section, ok := m.currentSection()
 	if !ok {
 		return nil
 	}
 	entries := make([]entry, 0, len(m.values)+len(m.actions))
-	for _, value := range m.values {
-		if value.Section == section.ID {
-			entries = append(entries, entry{value: value})
-		}
-	}
 	for _, action := range m.actions {
 		if action.Section == section.ID {
 			entries = append(entries, entry{action: action, isAction: true})
+		}
+	}
+	for _, value := range m.values {
+		if value.Section == section.ID {
+			entries = append(entries, entry{value: value})
 		}
 	}
 	return entries

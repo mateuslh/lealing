@@ -10,6 +10,7 @@ import (
 	requirementsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/requirements"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/port/inbound"
+	"github.com/mateuslh/lealing/internal/core/selfupdate"
 )
 
 // Limites de carga da home.
@@ -77,6 +78,22 @@ func (m *Model) Update(msg tea.Msg) (tui.Screen, tea.Cmd) {
 		m.marketplaceErr = msg.err
 		if msg.err == nil {
 			m.marketplaceCatalog = msg.catalog
+		}
+		return m, nil
+
+	case updateMsg:
+		m.updateStatus = msg.status
+		// A checagem roda em paralelo com o catálogo (veja Init): a home já
+		// está aberta e usável quando o aviso aparece, nunca antes dela.
+		if msg.status.State == selfupdate.StateOutdated && !m.updateSkipped(msg.status.Latest.Tag) {
+			m.updatePrompt = true
+			m.updatePromptCursor = updatePromptDefault
+		}
+		return m, nil
+
+	case updateSkippedMsg:
+		if msg.err != nil {
+			m.notify("não deu para lembrar essa escolha: "+msg.err.Error(), toneError)
 		}
 		return m, nil
 
@@ -216,6 +233,9 @@ func (m *Model) reload() tea.Cmd {
 
 // handleKey despacha o teclado conforme o modo ativo.
 func (m *Model) handleKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
+	if m.updatePrompt {
+		return m.handleUpdatePromptKey(msg)
+	}
 	if m.searching {
 		return m.handleSearchKey(msg)
 	}
@@ -224,6 +244,61 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
 	// usuário vai usar esperando que o foco esteja em algo visível.
 	m.normalizeFocus()
 	return m.handleBrowseKey(msg)
+}
+
+// Opções do aviso de atualização, na ordem em que aparecem na lista.
+const (
+	updatePromptUpdate  = iota // atualizar
+	updatePromptSkip           // ignorar até a próxima
+	updatePromptIgnore         // ignorar
+	updatePromptOptions        // sentinela: quantidade de opções
+)
+
+// updatePromptDefault é a opção pré-selecionada ao abrir o aviso.
+const updatePromptDefault = updatePromptUpdate
+
+// handleUpdatePromptKey trata o aviso de atualização. As setas navegam entre
+// as três opções como qualquer lista da engine; as letras continuam
+// funcionando como atalho direto, sem precisar navegar até a opção.
+//
+// Nenhuma saída pede uma segunda confirmação, porque nenhuma delas muda nada
+// sozinha — "atualizar" só abre a tela que ainda vai perguntar de novo antes
+// de trocar o binário.
+func (m *Model) handleUpdatePromptKey(msg tea.KeyMsg) (tui.Screen, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.updatePromptCursor = max(m.updatePromptCursor-1, 0)
+		return m, nil
+	case "down", "j":
+		m.updatePromptCursor = min(m.updatePromptCursor+1, updatePromptOptions-1)
+		return m, nil
+	case "enter", " ":
+		return m.activateUpdatePrompt(m.updatePromptCursor)
+	case "a":
+		return m.activateUpdatePrompt(updatePromptUpdate)
+	case "p":
+		return m.activateUpdatePrompt(updatePromptSkip)
+	case "i", "esc":
+		return m.activateUpdatePrompt(updatePromptIgnore)
+	}
+	return m, nil
+}
+
+// activateUpdatePrompt executa a opção escolhida no aviso, por navegação ou
+// por atalho de letra — os dois caminhos terminam aqui.
+func (m *Model) activateUpdatePrompt(option int) (tui.Screen, tea.Cmd) {
+	m.updatePrompt = false
+	switch option {
+	case updatePromptUpdate:
+		if m.updateScreen == nil {
+			return m, nil
+		}
+		return m, tui.Navigate(m.updateScreen())
+	case updatePromptSkip:
+		return m, m.skipUpdate(m.updateStatus.Latest.Tag)
+	default:
+		return m, nil
+	}
 }
 
 // handleSearchKey trata o teclado no modo busca.

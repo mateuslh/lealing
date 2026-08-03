@@ -54,7 +54,7 @@ func newSettings(directories xdg.Directories, engineVersion string) (*settings.S
 		},
 		Lookup: os.LookupEnv,
 		Rows: []settings.InfoRow{
-			{Section: settings.SectionEnvironment.ID, Label: "versão", Value: engineVersion},
+			{Section: settings.SectionUpdates.ID, Label: "versão", Value: engineVersion},
 			{Section: settings.SectionEnvironment.ID, Label: "configuração", Value: directories.Config},
 			{Section: settings.SectionEnvironment.ID, Label: "dados", Value: directories.Data},
 			{Section: settings.SectionEnvironment.ID, Label: "cache", Value: directories.Cache},

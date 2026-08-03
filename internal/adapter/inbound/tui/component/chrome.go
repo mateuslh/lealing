@@ -41,6 +41,12 @@ func Spread(left, right string, width int) string {
 type Topbar struct {
 	Trail []string
 	Meta  []string
+	// Badge é um selo já estilizado pelo chamador (cor, fundo, negrito) que
+	// aparece antes dos metadados neutros. Ao contrário de Meta — que a
+	// topbar sempre pinta com o mesmo tom apagado —, o Badge chega pronto:
+	// é o único jeito de um aviso pontual (uma atualização disponível, por
+	// exemplo) se destacar do resto sem uma tela por tela pedir uma cor nova.
+	Badge string
 }
 
 // Render desenha a topbar e a régua que a separa do conteúdo.
@@ -70,6 +76,13 @@ func (t Topbar) Render(th *theme.Theme, width int) string {
 			parts[i] = th.Meta.Render(m)
 		}
 		right = strings.Join(parts, th.Ghost.Render(" · "))
+	}
+	if t.Badge != "" {
+		if right != "" {
+			right = t.Badge + th.Ghost.Render("  ·  ") + right
+		} else {
+			right = t.Badge
+		}
 	}
 
 	inner := max(width-4, 0) // desconta o padding horizontal do estilo

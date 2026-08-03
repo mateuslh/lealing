@@ -19,6 +19,7 @@ import (
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
 	marketplacescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/marketplace"
 	settingsscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/settings"
+	updatescreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/update"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/persistence"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/pluginprocess"
@@ -148,6 +149,10 @@ func Wire(opts Options) (*App, error) {
 		opts.Version, directories, config, usageStore,
 		marketplaceSourceStore(directories), toolManager, repo, indexURL,
 	)
+	// Um Service só, reaproveitado pela tela de configuração e pelo selo da
+	// home: as duas verificações continuam independentes, mas não há motivo
+	// para montar o mesmo Locator/Releases/Applier duas vezes.
+	updateManager := Updater(opts.Version)
 
 	var toolRunners []outbound.ToolRunner
 	launcher := service.NewLauncher(toolManagement, catalogSvc, clock, log, toolRunners...)
@@ -188,6 +193,14 @@ func Wire(opts Options) (*App, error) {
 		return nil, err
 	}
 
+	// updateScreenFactory constrói a tela de atualização sob demanda. O aviso
+	// de startup na home e a ação "Atualizar o lealing" na configuração abrem
+	// exatamente o mesmo fluxo — a tela sempre reconfere o release antes de
+	// aplicar, então não há razão para duplicar a construção.
+	updateScreenFactory := func() tui.Screen {
+		return updatescreen.New(deps, updateManager, userHome, clock.Now)
+	}
+
 	// --- Adapter de entrada ---
 	root := home.New(home.Config{
 		Deps:          deps,
@@ -206,19 +219,41 @@ func Wire(opts Options) (*App, error) {
 		MarketplaceOnHome: func() bool {
 			return config.Bool(settings.KeyMarketplaceOnHome)
 		},
+		UpdateManager: updateManager,
+		UpdateCheckOnHome: func() bool {
+			return config.Bool(settings.KeyUpdateCheckOnHome)
+		},
+		UpdateScreen: updateScreenFactory,
+		UpdateSkippedVersion: func() string {
+			return config.String(settings.KeyUpdateSkippedVersion)
+		},
+		SkipUpdateVersion: func(tag string) error {
+			return config.Set(settings.KeyUpdateSkippedVersion, tag)
+		},
 		// A loja não entra em `screens`: ela não é uma tool do catálogo, e sim
 		// a porta por onde as tools chegam. A home a abre pela vitrine.
 		MarketplaceScreen: func() tui.Screen {
 			return marketplacescreen.New(deps, marketplaceSvc, toolManagement)
 		},
 		SettingsScreen: func() tui.Screen {
-			return settingsscreen.New(deps, config, settingsscreen.Action{
-				Section:     settings.SectionAccount.ID,
-				Label:       "Sincronização do GitHub",
-				Description: "Conecte sua conta, escolha o que pode sair da máquina e controle envios, downloads e conflitos.",
-				Value:       "gerenciar →",
-				Screen:      func() tui.Screen { return accountsyncscreen.New(deps, syncManager) },
-			})
+			return settingsscreen.New(deps, config,
+				settingsscreen.Action{
+					Section:     settings.SectionAccount.ID,
+					Glyph:       "⇄",
+					Label:       "Sincronização do GitHub",
+					Description: "Conecte sua conta, escolha o que pode sair da máquina e controle envios, downloads e conflitos.",
+					Value:       "gerenciar",
+					Screen:      func() tui.Screen { return accountsyncscreen.New(deps, syncManager) },
+				},
+				settingsscreen.Action{
+					Section:     settings.SectionUpdates.ID,
+					Glyph:       "⇪",
+					Label:       "Atualizar o lealing",
+					Description: "Confere o último release publicado e troca o binário — ou atualiza o clone e recompila, se esta instalação vier do fonte.",
+					Value:       "gerenciar",
+					Screen:      updateScreenFactory,
+				},
+			)
 		},
 	})
 
