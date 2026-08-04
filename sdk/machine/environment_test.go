@@ -49,6 +49,56 @@ func TestEnvironmentResolveCaminhosConcedidos(t *testing.T) {
 	}
 }
 
+func TestEnvironmentTrataDiretorioDeTrabalhoConformeONivelPedido(t *testing.T) {
+	working := t.TempDir()
+	pom := filepath.Join(working, "pom.xml")
+	newEnvironment := func(level string, dir string) machine.Environment {
+		return machine.NewEnvironment(protocol.Initialize{
+			Platform: hostPathPlatform(), HomeDir: t.TempDir(), WorkingDir: dir,
+			Permissions: protocol.Permissions{WorkingDir: level},
+		})
+	}
+
+	semPermissao := newEnvironment("", working)
+	if semPermissao.CanUseWorkingDir() {
+		t.Error("diretório entregue sem permissão declarada virou concessão")
+	}
+	if _, err := semPermissao.ResolveRead(pom); !errors.Is(err, machine.ErrPermissionDenied) {
+		t.Errorf("leitura sem permissão = %v", err)
+	}
+	if _, err := semPermissao.WorkingPath("pom.xml"); !errors.Is(err, machine.ErrPermissionDenied) {
+		t.Errorf("WorkingPath sem permissão = %v", err)
+	}
+
+	leitura := newEnvironment(protocol.WorkingDirRead, working)
+	if got, err := leitura.WorkingPath("pom.xml"); err != nil || got != pom {
+		t.Fatalf("WorkingPath = %q, %v", got, err)
+	}
+	if _, err := leitura.ResolveWrite(filepath.Join(working, ".run", "app.run.xml")); !errors.Is(err, machine.ErrPermissionDenied) {
+		t.Errorf("read não pode conceder escrita: %v", err)
+	}
+
+	escrita := newEnvironment(protocol.WorkingDirWrite, working)
+	if _, err := escrita.ResolveWrite(filepath.Join(working, ".run", "app.run.xml")); err != nil {
+		t.Errorf("write negou escrita no próprio diretório: %v", err)
+	}
+	if _, err := escrita.ResolveRead(filepath.Join(working, "..", "vizinho")); !errors.Is(err, machine.ErrPermissionDenied) {
+		t.Errorf("escape por .. foi aceito: %v", err)
+	}
+
+	// Engine antiga: nível declarado, caminho ausente.
+	semCaminho := newEnvironment(protocol.WorkingDirWrite, "")
+	if semCaminho.CanUseWorkingDir() {
+		t.Error("nível sem caminho não deveria virar concessão")
+	}
+
+	// Nível desconhecido de uma engine futura não vira concessão silenciosa.
+	desconhecido := newEnvironment("total", working)
+	if desconhecido.CanUseWorkingDir() || desconhecido.CanRead(pom) {
+		t.Error("nível desconhecido virou concessão")
+	}
+}
+
 func TestEnvironmentComparaWindowsSemDependerDoHostDoTeste(t *testing.T) {
 	environment := machine.NewEnvironment(protocol.Initialize{
 		Platform: "WINDOWS", HomeDir: `C:\Users\Ana`,

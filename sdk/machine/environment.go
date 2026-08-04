@@ -86,7 +86,11 @@ type Environment struct {
 	HomeDir      string
 	DataDir      string
 	CacheDir     string
-	Permissions  protocol.Permissions
+	// WorkingDir é o diretório de onde o usuário abriu a engine. Fica vazio
+	// quando o manifest não pede permissions.workingDir ou quando a engine
+	// é anterior ao campo.
+	WorkingDir  string
+	Permissions protocol.Permissions
 }
 
 // NewEnvironment converte o DTO do protocolo em contexto operacional.
@@ -99,11 +103,36 @@ func NewEnvironment(initialize protocol.Initialize) Environment {
 	permissions := initialize.Permissions
 	permissions.Filesystem.Read = append([]string(nil), permissions.Filesystem.Read...)
 	permissions.Filesystem.Write = append([]string(nil), permissions.Filesystem.Write...)
+	if !protocol.ValidWorkingDir(permissions.WorkingDir) {
+		// Nível desconhecido de uma engine futura não vira concessão.
+		permissions.WorkingDir = protocol.WorkingDirNone
+	}
 	return Environment{
 		Platform: ParsePlatform(initialize.Platform), Architecture: ParseArchitecture(initialize.Architecture),
 		HomeDir: home, DataDir: initialize.DataDir, CacheDir: initialize.CacheDir,
-		Permissions: permissions,
+		WorkingDir: initialize.WorkingDir, Permissions: permissions,
 	}
+}
+
+// CanUseWorkingDir informa se a tool recebeu de fato o diretório de trabalho.
+// Uma tool que depende dele deve conferir isso antes de tocar o disco, porque
+// engines antigas e instalações sem a permissão devolvem o valor vazio.
+func (e Environment) CanUseWorkingDir() bool {
+	return e.WorkingDir != "" && e.Permissions.WorkingDir != protocol.WorkingDirNone
+}
+
+// WorkingPath resolve um caminho dentro do diretório de trabalho, como
+// DataPath e CachePath fazem para os diretórios privados. A concessão de
+// escrita só existe quando o manifest declara workingDir: write.
+func (e Environment) WorkingPath(elements ...string) (string, error) {
+	if !e.CanUseWorkingDir() {
+		return "", &PermissionError{Operation: "de diretório de trabalho", Path: e.WorkingDir}
+	}
+	candidate := e.WorkingDir
+	for _, element := range elements {
+		candidate = joinFor(e.Platform, candidate, element)
+	}
+	return e.ResolveRead(candidate)
 }
 
 // PermissionError informa qual operação ficou fora das concessões do
@@ -159,12 +188,19 @@ func (e Environment) readGrants() []string {
 	// Os diretórios privados são criados pela engine para a tool e sempre
 	// podem ser relidos, mesmo sem aparecer no manifest.
 	grants = appendNonEmpty(grants, e.DataDir, e.CacheDir)
+	// Ler o diretório de trabalho basta declarar read; escrever exige write.
+	if e.Permissions.WorkingDir == protocol.WorkingDirRead || e.Permissions.WorkingDir == protocol.WorkingDirWrite {
+		grants = appendNonEmpty(grants, e.WorkingDir)
+	}
 	return grants
 }
 
 func (e Environment) writeGrants() []string {
 	grants := append([]string(nil), e.Permissions.Filesystem.Write...)
 	grants = appendNonEmpty(grants, e.DataDir, e.CacheDir)
+	if e.Permissions.WorkingDir == protocol.WorkingDirWrite {
+		grants = appendNonEmpty(grants, e.WorkingDir)
+	}
 	return grants
 }
 

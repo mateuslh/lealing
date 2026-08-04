@@ -142,8 +142,11 @@ type StartOptions struct {
 	HomeDir       string
 	DataDir       string
 	CacheDir      string
-	Capabilities  []string
-	Permissions   domain.ToolPermissions
+	// WorkingDir só é preenchido para tools que declaram a permissão; as
+	// demais nem descobrem de onde o usuário abriu a engine.
+	WorkingDir   string
+	Capabilities []string
+	Permissions  domain.ToolPermissions
 }
 
 // Session é o lado vivo da porta de saída. Seus métodos podem fazer I/O e,
@@ -177,7 +180,10 @@ type ServiceConfig struct {
 	DataRoot      string
 	CacheRoot     string
 	UserHome      string
-	Capabilities  []string
+	// WorkingDir é o diretório de onde a engine foi aberta, injetado pelo
+	// bootstrap. O core não consulta o processo.
+	WorkingDir   string
+	Capabilities []string
 }
 
 type Service struct {
@@ -201,6 +207,14 @@ func (s *Service) Open(ctx context.Context, id domain.ToolID, options OpenOption
 		return nil, domain.WrapTool(id, fmt.Errorf("runtime não usa screen-v1"))
 	}
 	capabilities := intersection(tool.Runtime.Capabilities, s.config.Capabilities)
+	permissions := resolvePermissions(tool.Runtime.Permissions, s.config.UserHome)
+	// Quem não declara a permissão não recebe o caminho: o diretório de
+	// trabalho diz onde o usuário está trabalhando agora, e isso não é
+	// informação de ambiente que se entregue por padrão.
+	workingDir := ""
+	if permissions.WorkingDir != "" {
+		workingDir = s.config.WorkingDir
+	}
 	return s.runtime.Start(ctx, tool, StartOptions{
 		EngineVersion: s.config.EngineVersion,
 		Platform:      s.config.Platform, Architecture: s.config.Architecture,
@@ -208,8 +222,9 @@ func (s *Service) Open(ctx context.Context, id domain.ToolID, options OpenOption
 		HomeDir:      s.config.UserHome,
 		DataDir:      filepath.Join(s.config.DataRoot, string(id)),
 		CacheDir:     filepath.Join(s.config.CacheRoot, string(id)),
+		WorkingDir:   workingDir,
 		Capabilities: capabilities,
-		Permissions:  resolvePermissions(tool.Runtime.Permissions, s.config.UserHome),
+		Permissions:  permissions,
 	})
 }
 
@@ -227,6 +242,7 @@ func resolvePermissions(permissions domain.ToolPermissions, home string) domain.
 	return domain.ToolPermissions{
 		ReadPaths: expand(permissions.ReadPaths), WritePaths: expand(permissions.WritePaths),
 		Network: permissions.Network, Subprocess: permissions.Subprocess,
+		WorkingDir: permissions.WorkingDir,
 	}
 }
 

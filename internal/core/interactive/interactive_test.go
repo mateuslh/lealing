@@ -54,4 +54,39 @@ func TestServiceEntregaSomenteCapabilitiesEPathsConcedidos(t *testing.T) {
 	if runtime.options.HomeDir != "/users/teste" {
 		t.Fatalf("home = %q", runtime.options.HomeDir)
 	}
+	if runtime.options.WorkingDir != "" {
+		t.Fatalf("tool sem permissions.workingDir recebeu %q", runtime.options.WorkingDir)
+	}
+}
+
+func TestServiceEntregaDiretorioDeTrabalhoSomenteAQuemDeclara(t *testing.T) {
+	newService := func(level string) *runtime {
+		tool := domain.Tool{ID: "demo", Kind: domain.KindProcess, Runtime: &domain.ExternalRuntime{
+			UIMode: "screen-v1", Permissions: domain.ToolPermissions{WorkingDir: level},
+		}}
+		runtime := &runtime{}
+		service := interactive.NewService(catalog{tool: tool}, runtime, interactive.ServiceConfig{
+			EngineVersion: "1.0.0", Platform: "darwin", Architecture: "arm64",
+			DataRoot: "/data", CacheRoot: "/cache", UserHome: "/users/teste",
+			WorkingDir: "/users/teste/projetos/servico",
+		})
+		if _, err := service.Open(context.Background(), "demo", interactive.OpenOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		return runtime
+	}
+
+	semDeclaracao := newService("")
+	if semDeclaracao.options.WorkingDir != "" || semDeclaracao.options.Permissions.WorkingDir != "" {
+		t.Errorf("sem declaração: dir = %q, nível = %q",
+			semDeclaracao.options.WorkingDir, semDeclaracao.options.Permissions.WorkingDir)
+	}
+
+	comLeitura := newService("read")
+	if comLeitura.options.WorkingDir != "/users/teste/projetos/servico" {
+		t.Errorf("com read: dir = %q", comLeitura.options.WorkingDir)
+	}
+	if comLeitura.options.Permissions.WorkingDir != "read" {
+		t.Errorf("com read: nível = %q", comLeitura.options.Permissions.WorkingDir)
+	}
 }

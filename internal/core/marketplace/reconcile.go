@@ -262,6 +262,7 @@ func installRequest(entry Entry, sourceDir string) toolinstall.InstallRequest {
 			FilesystemRead:  append([]string(nil), entry.Permissions.Filesystem.Read...),
 			FilesystemWrite: append([]string(nil), entry.Permissions.Filesystem.Write...),
 			Network:         entry.Permissions.Network, Subprocess: entry.Permissions.Subprocess,
+			WorkingDir: entry.Permissions.WorkingDir,
 		},
 	}
 }

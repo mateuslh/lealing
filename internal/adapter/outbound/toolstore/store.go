@@ -186,6 +186,12 @@ func matchesExpectation(manifest toolmanifest.Manifest, expected toolinstall.Man
 		return mismatch("permissions.filesystem.read")
 	case !sameStrings(manifest.Permissions.Filesystem.Write, expected.FilesystemWrite):
 		return mismatch("permissions.filesystem.write")
+	// Um índice que não fala sobre workingDir é anterior ao campo, não um
+	// índice em conflito: exigir o campo faria toda ferramenta de publicação
+	// existente parar de funcionar. A divergência só existe quando o índice
+	// declara um valor e o pacote traz outro.
+	case expected.WorkingDir != "" && manifest.Permissions.WorkingDir != expected.WorkingDir:
+		return mismatch("permissions.workingDir")
 	default:
 		return nil
 	}

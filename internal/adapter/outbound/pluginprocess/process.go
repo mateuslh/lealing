@@ -129,6 +129,7 @@ func (r *Runtime) Start(ctx context.Context, tool domain.Tool, options interacti
 		Frame: toProtocolFrame(options.Frame).Clamp(), Theme: toProtocolTheme(options.Theme),
 		HomeDir: options.HomeDir,
 		DataDir: options.DataDir, CacheDir: options.CacheDir,
+		WorkingDir:   options.WorkingDir,
 		Capabilities: append([]string(nil), options.Capabilities...),
 		Permissions: protocol.Permissions{
 			Filesystem: protocol.FilesystemPermissions{
@@ -136,6 +137,7 @@ func (r *Runtime) Start(ctx context.Context, tool domain.Tool, options interacti
 				Write: append([]string(nil), options.Permissions.WritePaths...),
 			},
 			Network: options.Permissions.Network, Subprocess: options.Permissions.Subprocess,
+			WorkingDir: options.Permissions.WorkingDir,
 		},
 	}
 	if err := session.write(protocol.MethodInitialize, initialize); err != nil {

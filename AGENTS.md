@@ -236,6 +236,9 @@ Regras do manifest:
 - executável é um nome simples, sem diretório, argumentos ou shell;
 - requisitos de `PATH` contêm somente `executable`, `name` e `installHint`;
 - risco e permissões descrevem o comportamento real;
+- `permissions.workingDir` (`read` ou `write`) é o único jeito de uma tool
+  receber o diretório de onde a engine foi aberta; sem a declaração o campo
+  não vai no handshake;
 - plataformas e intervalo de protocolo são explícitos;
 - a engine não infere suporte, permissão ou requisito ausente;
 - `ui.wantsMouse` é opcional e falso por padrão — só declare `true` se a tool

@@ -163,6 +163,10 @@ type ToolPermissions struct {
 	WritePaths []string
 	Network    bool
 	Subprocess bool
+	// WorkingDir é o nível pedido para o diretório de onde o usuário abriu a
+	// engine: vazio, "read" ou "write". O caminho em si não cabe no manifest
+	// porque só existe em tempo de execução.
+	WorkingDir string
 }
 
 // Interactive informa se a tool usa uma sessão screen-v1 dentro do chrome.

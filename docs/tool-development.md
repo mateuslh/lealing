@@ -162,6 +162,7 @@ lealing -tool-validate ./dist/darwin-arm64
 | `platforms` | Lista não vazia de alvos publicados. |
 | `requirements` | Executáveis obrigatórios encontrados no `PATH`. |
 | `permissions` | Acesso real a disco, rede e subprocessos. |
+| `permissions.workingDir` | Opcional: `read` ou `write` sobre o diretório de onde a engine foi aberta. Veja §3.5. |
 
 Alvos reconhecidos:
 
@@ -224,6 +225,41 @@ Na v1, permissões são apresentadas ao usuário e ajudam uma tool bem-comportad
 a aplicar o contrato. Elas não prometem sandbox do sistema operacional. O SDK
 confere arquivos e subprocessos antes da operação; rede continua sendo uma
 declaração de confiança, não isolamento técnico.
+
+### 3.5 Diretório de trabalho
+
+O processo da tool roda com o diretório de instalação como diretório corrente;
+`os.Getwd` não devolve onde o usuário está trabalhando. Uma tool que precisa
+reagir ao projeto aberto declara a intenção no manifest:
+
+```yaml
+permissions:
+  workingDir: read     # ou write
+```
+
+Só com essa declaração a engine envia `workingDir` no handshake e concede o
+caminho ao `sdk/machine`. `read` permite ler a árvore; `write` também autoriza
+escrever nela. O caminho não aparece no manifest porque só existe em tempo de
+execução — quem valida a instalação vê o nível pedido, e a ficha da tool no
+marketplace mostra `dir. atual: leitura` ou `leitura e escrita`.
+
+```go
+environment := machine.NewEnvironment(session.Initialize)
+if !environment.CanUseWorkingDir() {
+    return nil, errors.New("abra o lealing de dentro do projeto")
+}
+pom, err := environment.WorkingPath("pom.xml")
+```
+
+`CanUseWorkingDir` é obrigatório antes de tocar o disco: engines anteriores ao
+campo e instalações sem a permissão devolvem o valor vazio, e uma tool que
+assume o contrário quebra na máquina do usuário, não na sua.
+
+No índice do marketplace, `permissions.workingDir` é opcional. Um índice que
+não declara o campo continua instalando normalmente — ferramentas de publicação
+anteriores a ele seguem válidas — e a engine só recusa quando o índice declara
+um nível diferente do que o pacote traz. Um índice omisso apenas não exibe a
+linha na ficha da tool.
 
 ## 4. Executável e `screen.Run`
 
@@ -429,8 +465,8 @@ if err == nil {
 ```
 
 APIs públicas: `ResolveRead`, `ResolveWrite`, `CanRead`, `CanWrite`,
-`DataPath`, `CachePath`, `Open`, `ReadFile`, `Stat`, `ReadDir`, `WalkDir`,
-`MkdirAll` e `WriteFileAtomic`.
+`DataPath`, `CachePath`, `CanUseWorkingDir`, `WorkingPath`, `Open`, `ReadFile`,
+`Stat`, `ReadDir`, `WalkDir`, `MkdirAll` e `WriteFileAtomic`.
 
 Não toque o disco antes de resolver a concessão. Prefira escrita atômica para
 estado persistente.

@@ -135,6 +135,44 @@ func TestInstallRecusaManifestQueDivergeDoAnunciadoNoMarketplace(t *testing.T) {
 	if _, err := store(root).Install(context.Background(), request); err != nil {
 		t.Fatalf("manifest igual ao índice foi recusado: %v", err)
 	}
+
+	// Um índice que declara um nível diferente do pacote não instala: é por
+	// essa ficha que o usuário decidiu confiar na tool.
+	expected.WorkingDir = "write"
+	if _, err := store(t.TempDir()).Install(context.Background(), request); err == nil ||
+		!strings.Contains(err.Error(), "permissions.workingDir") {
+		t.Fatalf("Install = %v", err)
+	}
+}
+
+// Índices publicados antes do campo existir não declaram workingDir. Tratar a
+// omissão como divergência quebraria toda ferramenta de publicação anterior,
+// então ela precisa continuar instalando.
+func TestInstallAceitaIndiceAnteriorAoCampoWorkingDir(t *testing.T) {
+	root := t.TempDir()
+	source := source(t, "1.0.0", "ok")
+	manifest := filepath.Join(source, "manifest.yaml")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(raw), "permissions:", "permissions:\n  workingDir: write", 1)
+	if err := os.WriteFile(manifest, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	request := toolinstall.InstallRequest{
+		SourceDir: source,
+		ExpectedManifest: &toolinstall.ManifestExpectation{
+			ID: "demo", Version: "1.0.0", Name: "Demo",
+			Summary: "Tool local de demonstração.", Detail: "Teste.", Category: "ai",
+			Risk: "safe", ProtocolMin: 1, ProtocolMax: 1,
+			FilesystemRead: []string{}, FilesystemWrite: []string{},
+		},
+	}
+	if _, err := store(root).Install(context.Background(), request); err != nil {
+		t.Fatalf("índice sem o campo foi recusado: %v", err)
+	}
 }
 
 func TestManifestNovoInvalidoNaoSubstituiInstalacaoSaudavel(t *testing.T) {

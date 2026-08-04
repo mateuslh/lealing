@@ -144,6 +144,30 @@ type Permissions struct {
 	Filesystem FilesystemPermissions `json:"filesystem"`
 	Network    bool                  `json:"network"`
 	Subprocess bool                  `json:"subprocess"`
+	// WorkingDir concede o diretório de onde o usuário abriu a engine. É
+	// separado do filesystem porque o caminho não é conhecido no manifest:
+	// a tool declara a intenção e a engine entrega o valor no handshake.
+	// A tag yaml existe porque o manifest declarativo decodifica direto
+	// neste tipo e o campo é camelCase.
+	WorkingDir string `json:"workingDir,omitempty" yaml:"workingDir,omitempty"`
+}
+
+// Níveis aceitos em Permissions.WorkingDir. A ausência do campo mantém o
+// diretório de trabalho fora do handshake.
+const (
+	WorkingDirNone  = ""
+	WorkingDirRead  = "read"
+	WorkingDirWrite = "write"
+)
+
+// ValidWorkingDir informa se o nível declarado pertence ao contrato.
+func ValidWorkingDir(level string) bool {
+	switch level {
+	case WorkingDirNone, WorkingDirRead, WorkingDirWrite:
+		return true
+	default:
+		return false
+	}
 }
 
 type FilesystemPermissions struct {
@@ -163,8 +187,11 @@ type Initialize struct {
 	HomeDir       string       `json:"homeDir,omitempty"`
 	DataDir       string       `json:"dataDir"`
 	CacheDir      string       `json:"cacheDir"`
-	Capabilities  []string     `json:"capabilities,omitempty"`
-	Permissions   Permissions  `json:"permissions"`
+	// WorkingDir é o diretório de onde o usuário abriu a engine. Só é
+	// enviado a tools que declaram permissions.workingDir no manifest.
+	WorkingDir   string      `json:"workingDir,omitempty"`
+	Capabilities []string    `json:"capabilities,omitempty"`
+	Permissions  Permissions `json:"permissions"`
 }
 
 // Initialized conclui o handshake do lado da tool.

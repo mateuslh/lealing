@@ -163,6 +163,9 @@ func (m Manifest) Validate(opts ValidationOptions) error {
 			return fail("permissions.filesystem", "contém caminho inválido")
 		}
 	}
+	if !protocol.ValidWorkingDir(m.Permissions.WorkingDir) {
+		return fail("permissions.workingDir", "aceita somente read ou write")
+	}
 	for _, capability := range m.UI.Capabilities {
 		if !knownCapability(capability) {
 			return fail("ui.capabilities", "contém capability desconhecida "+capability)
@@ -286,6 +289,7 @@ func (m Manifest) Tool(installDir, executable string) (domain.Tool, error) {
 				ReadPaths:  append([]string(nil), m.Permissions.Filesystem.Read...),
 				WritePaths: append([]string(nil), m.Permissions.Filesystem.Write...),
 				Network:    m.Permissions.Network, Subprocess: m.Permissions.Subprocess,
+				WorkingDir: m.Permissions.WorkingDir,
 			},
 		},
 	}, nil

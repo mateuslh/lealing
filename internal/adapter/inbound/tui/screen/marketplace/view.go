@@ -335,8 +335,17 @@ func (m *Model) toolSheet(th *theme.Theme, listing coremarket.Listing, width int
 			Tone: permissionTone(th, listing.Permissions.Network)},
 		{Label: "subprocesso", Value: yesNo(listing.Permissions.Subprocess),
 			Tone: permissionTone(th, listing.Permissions.Subprocess)},
-		{Label: "risco", Value: listing.Risk, Tone: riskColor(th, listing.Risk)},
 	}...)
+	// Índice anterior ao campo não afirma nada sobre o diretório de trabalho;
+	// escrever "não" ali seria inventar uma informação que ninguém publicou.
+	if listing.Permissions.WorkingDir != "" {
+		permissions = append(permissions, component.Row{
+			Label: "dir. atual", Value: workingDirLabel(listing.Permissions.WorkingDir),
+			Tone: permissionTone(th, true),
+		})
+	}
+	permissions = append(permissions,
+		component.Row{Label: "risco", Value: listing.Risk, Tone: riskColor(th, listing.Risk)})
 	lines = append(lines, m.sheetSection(th, "permissões", width,
 		splitLines(component.FieldList{Rows: permissions, Width: width, LabelWidth: 12}.Render(th))...)...)
 
@@ -930,6 +939,20 @@ func yesNo(value bool) string {
 		return "permitido"
 	}
 	return "não"
+}
+
+// workingDirLabel traduz o nível pedido para o diretório de onde a engine foi
+// aberta. O caminho não aparece aqui: ele muda a cada abertura e o que o
+// usuário precisa decidir é se concede leitura ou escrita.
+func workingDirLabel(level string) string {
+	switch level {
+	case "read":
+		return "leitura"
+	case "write":
+		return "leitura e escrita"
+	default:
+		return "não"
+	}
 }
 
 func toolGlyph(glyph string) string {

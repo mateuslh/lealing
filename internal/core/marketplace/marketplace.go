@@ -62,6 +62,9 @@ type Permissions struct {
 	Filesystem FilesystemPermissions `json:"filesystem" yaml:"filesystem"`
 	Network    bool                  `json:"network" yaml:"network"`
 	Subprocess bool                  `json:"subprocess" yaml:"subprocess"`
+	// WorkingDir espelha o campo do manifest para que a ficha da tool
+	// mostre o pedido antes do download.
+	WorkingDir string `json:"workingDir,omitempty" yaml:"workingDir,omitempty"`
 }
 
 // Entry carrega tudo que a tela precisa para listar uma tool sem baixar nem
@@ -670,6 +673,14 @@ func validatePermissions(id string, permissions Permissions) error {
 			}
 			seen[key] = true
 		}
+	}
+	// Os níveis são repetidos aqui, e não importados do SDK, porque o core
+	// não depende do pacote do fio — a mesma razão pela qual as capabilities
+	// aparecem duas vezes no repositório.
+	switch permissions.WorkingDir {
+	case "", "read", "write":
+	default:
+		return fmt.Errorf("permissão workingDir inválida em %s: %s", id, permissions.WorkingDir)
 	}
 	return nil
 }

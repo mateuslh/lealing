@@ -84,6 +84,34 @@ func TestManifestPropagaWantsMouse(t *testing.T) {
 	}
 }
 
+func TestManifestPropagaWorkingDir(t *testing.T) {
+	semDeclaracao, err := toolmanifest.ParseAndValidate(validManifest("sem-dir"), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := semDeclaracao.Tool("/instalacao", "/instalacao/lealing-tool-sem-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.Runtime.Permissions.WorkingDir != "" {
+		t.Errorf("manifest sem workingDir concedeu %q", tool.Runtime.Permissions.WorkingDir)
+	}
+
+	raw := strings.Replace(string(validManifest("com-dir")), "  network: false",
+		"  workingDir: write\n  network: false", 1)
+	comDeclaracao, err := toolmanifest.ParseAndValidate([]byte(raw), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err = comDeclaracao.Tool("/instalacao", "/instalacao/lealing-tool-com-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.Runtime.Permissions.WorkingDir != "write" {
+		t.Errorf("workingDir = %q, esperado write", tool.Runtime.Permissions.WorkingDir)
+	}
+}
+
 func TestManifestRecusaCamposInvalidos(t *testing.T) {
 	tests := map[string]func(string) string{
 		"apiVersion": func(s string) string { return strings.Replace(s, "lealing.dev/v1", "lealing.dev/v9", 1) },
@@ -100,6 +128,9 @@ func TestManifestRecusaCamposInvalidos(t *testing.T) {
 		"protocolo":  func(s string) string { return strings.Replace(s, "min: 1", "min: 0", 1) },
 		"plataforma": func(s string) string { return strings.Replace(s, "darwin-arm64", "plan9-mips", 1) },
 		"permissão":  func(s string) string { return strings.Replace(s, "~/.codex/sessions", "../segredo", 1) },
+		"workingDir": func(s string) string {
+			return strings.Replace(s, "  network: false", "  workingDir: total\n  network: false", 1)
+		},
 		"escape no nome": func(s string) string {
 			return strings.Replace(s, "name: Tool de teste", "name: \"Tool \\x1b]0;roubada\\x07\"", 1)
 		},

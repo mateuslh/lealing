@@ -37,6 +37,7 @@ type ManifestExpectation struct {
 	ProtocolMin, ProtocolMax                                  int
 	FilesystemRead, FilesystemWrite                           []string
 	Network, Subprocess                                       bool
+	WorkingDir                                                string
 }
 
 type Installation struct {

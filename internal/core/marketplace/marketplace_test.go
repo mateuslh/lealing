@@ -76,6 +76,19 @@ func TestValidaIndicePublico(t *testing.T) {
 	}
 }
 
+func TestIndiceAceitaWorkingDirConhecidoERejeitaNivelInventado(t *testing.T) {
+	entry := validEntry()
+	entry.Permissions.WorkingDir = "read"
+	if err := entry.Validate(validationOptions()); err != nil {
+		t.Fatalf("workingDir read = %v", err)
+	}
+
+	entry.Permissions.WorkingDir = "total"
+	if err := entry.Validate(validationOptions()); err == nil || !strings.Contains(err.Error(), "workingDir") {
+		t.Fatalf("nível inventado = %v", err)
+	}
+}
+
 func TestIndiceRejeitaURLSemHTTPSEChecksumInvalido(t *testing.T) {
 	entry := validEntry()
 	entry.Artifacts[0].URL = "http://example.test/demo.tar.gz"

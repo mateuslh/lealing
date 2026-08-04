@@ -166,6 +166,10 @@ func Wire(opts Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	// O diretório de onde a engine foi aberta entra por injeção, como home e
+	// relógio. Falhar aqui não impede a engine de abrir: as tools que pedem
+	// o diretório apenas não o recebem.
+	workingDir, _ := os.Getwd()
 	native := adaptersFor(platform)
 	capabilities := []string{
 		interactive.CapabilityNavigationBack,
@@ -185,6 +189,7 @@ func Wire(opts Options) (*App, error) {
 		DataRoot:      filepath.Join(directories.Data, "tool-data"),
 		CacheRoot:     filepath.Join(directories.Cache, "tools"),
 		UserHome:      userHome,
+		WorkingDir:    workingDir,
 		Capabilities:  capabilities,
 	})
 	hostActions := hostaction.NewService(native.host)
