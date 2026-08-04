@@ -38,21 +38,10 @@ func TestDependenciasApontamParaDentro(t *testing.T) {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(file.rel, "sdk/protocol/"):
-			for _, imported := range file.imports {
-				if isThirdParty(imported) {
-					t.Errorf("%s: sdk/protocol deve usar só a biblioteca padrão; importa %q", file.rel, imported)
-				}
-			}
-
-		case strings.HasPrefix(file.rel, "sdk/"):
-			for _, imported := range file.imports {
-				if strings.HasPrefix(imported, module+"/internal/bootstrap") ||
-					strings.HasPrefix(imported, module+"/internal/catalog") {
-					t.Errorf("%s: SDK público importa engine concreta %q", file.rel, imported)
-				}
-			}
-
+		// O SDK público (protocol/screen/component/machine) não vive mais
+		// neste módulo — mora em github.com/mateuslh/lealing-sdk, um
+		// repositório independente que define e testa seu próprio contrato.
+		// Este arquivo só protege as fronteiras do que ainda está aqui.
 		case strings.HasPrefix(file.rel, "internal/core/"):
 			for _, imported := range file.imports {
 				if strings.HasPrefix(imported, module+"/internal/") &&

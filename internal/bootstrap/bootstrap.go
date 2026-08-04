@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/mateuslh/lealing-sdk/protocol"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	accountsyncscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/accountsync"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/home"
@@ -33,7 +34,6 @@ import (
 	"github.com/mateuslh/lealing/internal/core/settings"
 	"github.com/mateuslh/lealing/internal/core/toolmanage"
 	"github.com/mateuslh/lealing/internal/platform/logging"
-	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 // Options são as escolhas que o binário oferece na linha de comando.

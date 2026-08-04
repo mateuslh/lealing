@@ -1,21 +1,32 @@
 # Desenvolvendo tools para o lealing
 
 Este é o guia normativo para criar, testar, empacotar e publicar uma tool do
-lealing. A fonte da verdade é este repositório:
+lealing. O fluxo para autores é definido aqui; o contrato executável do SDK
+é definido e testado num repositório independente,
+[`github.com/mateuslh/lealing-sdk`](https://github.com/mateuslh/lealing-sdk)
+— ele **não é parte desta engine**, é uma dependência pública que autores de
+tools importam diretamente e que esta engine também referencia por versão:
 
 - este documento define o fluxo para autores;
-- `sdk/protocol` define os DTOs e o framing serializável;
-- `sdk/screen` adapta models Bubble Tea ao protocolo `screen-v1`;
-- `sdk/component` oferece componentes visuais públicos;
-- `sdk/machine` oferece plataforma, caminhos, arquivos e subprocessos;
-- `internal/toolmanifest` valida `manifest.yaml`;
-- `internal/core/marketplace` valida `index.json`.
+- `github.com/mateuslh/lealing-sdk` (pacote `protocol`) define os DTOs e o
+  framing serializável;
+- `github.com/mateuslh/lealing-sdk` (pacote `screen`) adapta models Bubble
+  Tea ao protocolo `screen-v1`;
+- `github.com/mateuslh/lealing-sdk` (pacote `component`) oferece componentes
+  visuais públicos;
+- `github.com/mateuslh/lealing-sdk` (pacote `machine`) oferece plataforma,
+  caminhos, arquivos e subprocessos;
+- `internal/toolmanifest`, nesta engine, valida `manifest.yaml`;
+- `internal/core/marketplace`, nesta engine, valida `index.json`.
 
 Repositórios de tools, inclusive a origem configurada por padrão, são somente
 exemplos e consumidores desses contratos. O conteúdo deles não acrescenta,
-remove nem altera uma regra da engine. Em caso de divergência, os tipos e
-validadores desta engine definem o comportamento executável; este guia precisa
-ser corrigido junto com qualquer mudança pública.
+remove nem altera uma regra da engine nem do SDK. Em caso de divergência
+sobre o formato do manifest ou do índice, os tipos e validadores desta
+engine definem o comportamento executável; em caso de divergência sobre o
+protocolo `screen-v1` em si, o repositório `lealing-sdk` é quem define. Este
+guia precisa ser corrigido junto com qualquer mudança pública em qualquer um
+dos dois repositórios.
 
 ## 1. O que é uma tool
 
@@ -68,26 +79,31 @@ dist/
     lealing-tool-example.exe
 ```
 
-O módulo importa somente APIs públicas da engine:
+O módulo importa somente APIs públicas do SDK independente:
 
 ```go
-require github.com/mateuslh/lealing vX.Y.Z
+require github.com/mateuslh/lealing-sdk vX.Y.Z
 ```
 
 Imports permitidos:
 
 ```go
-github.com/mateuslh/lealing/sdk/protocol
-github.com/mateuslh/lealing/sdk/screen
-github.com/mateuslh/lealing/sdk/component
-github.com/mateuslh/lealing/sdk/machine
+github.com/mateuslh/lealing-sdk/protocol
+github.com/mateuslh/lealing-sdk/screen
+github.com/mateuslh/lealing-sdk/component
+github.com/mateuslh/lealing-sdk/machine
 ```
 
 Nunca importe `github.com/mateuslh/lealing/internal`. Pacotes `internal` não
-são contrato e Go recusará seu uso fora do módulo da engine.
+são contrato e Go recusará seu uso fora do módulo da engine. Note que o
+módulo da tool não precisa (e normalmente não deve) depender do módulo da
+engine em nenhum ponto — só do SDK. A engine só entra em cena em tempo de
+desenvolvimento, como binário externo chamado via `go run` para validar o
+manifest (`cmd/lealing -tool-validate`) e instalar localmente
+(`cmd/lealing -tool-install`).
 
-Fixe uma versão da engine no `go.mod`. Atualize-a deliberadamente depois de
-ler as mudanças do SDK; não dependa de uma branch mutável para publicar.
+Fixe uma versão do SDK no `go.mod`. Atualize-a deliberadamente depois de ler
+o changelog da tag nova; não dependa de uma branch mutável para publicar.
 
 ## 3. Manifest
 
@@ -219,7 +235,7 @@ permissions:
 
 Declare somente o que o binário realmente usa. `DataDir` e `CacheDir` são
 diretórios privados negociados para a tool e podem ser lidos e escritos por
-meio de `sdk/machine` sem repeti-los no manifest.
+meio de `lealing-sdk/machine` sem repeti-los no manifest.
 
 Na v1, permissões são apresentadas ao usuário e ajudam uma tool bem-comportada
 a aplicar o contrato. Elas não prometem sandbox do sistema operacional. O SDK
@@ -238,7 +254,7 @@ permissions:
 ```
 
 Só com essa declaração a engine envia `workingDir` no handshake e concede o
-caminho ao `sdk/machine`. `read` permite ler a árvore; `write` também autoriza
+caminho ao `lealing-sdk/machine`. `read` permite ler a árvore; `write` também autoriza
 escrever nela. O caminho não aparece no manifest porque só existe em tempo de
 execução — quem valida a instalação vê o nível pedido, e a ficha da tool no
 marketplace mostra `dir. atual: leitura` ou `leitura e escrita`.
@@ -275,9 +291,9 @@ import (
     "os"
     "os/signal"
 
-    "github.com/mateuslh/lealing/sdk/machine"
-    "github.com/mateuslh/lealing/sdk/protocol"
-    "github.com/mateuslh/lealing/sdk/screen"
+    "github.com/mateuslh/lealing-sdk/machine"
+    "github.com/mateuslh/lealing-sdk/protocol"
+    "github.com/mateuslh/lealing-sdk/screen"
 )
 
 var version = "dev"
@@ -494,7 +510,7 @@ Materialize sempre o tema recebido:
 theme := component.ThemeFrom(session.Initialize.Theme)
 ```
 
-Use `sdk/component` para painéis, alinhamento, truncamento, centralização,
+Use `lealing-sdk/component` para painéis, alinhamento, truncamento, centralização,
 meters, barras e sparklines. Não copie cores internas da engine nem fixe uma
 paleta como única opção; `component.DefaultTheme` é reserva para testes e host
 incompleto.
@@ -552,8 +568,8 @@ confirmação global e depois execute a ação sem `confirmation.request`.
 
 ## 9. Protocolo `screen-v1`
 
-Autores em Go devem usar `sdk/screen`; não reimplementem o fio. Para outro
-runtime, `sdk/protocol` é a especificação executável.
+Autores em Go devem usar `lealing-sdk/screen`; não reimplementem o fio. Para
+outro runtime, `lealing-sdk/protocol` é a especificação executável.
 
 Invariantes da v1:
 
@@ -628,9 +644,10 @@ de teste. Cubra:
 - factory com erro e model nil;
 - payload hostil e mensagem acima do limite.
 
-O harness canônico está em `sdk/screen/screen_test.go`; framing parcial e
-limites estão em `sdk/protocol/protocol_test.go`. Esses testes da engine são a
-referência, não uma suíte copiada de outro repositório.
+O harness canônico está em `screen/screen_test.go` e framing parcial e
+limites estão em `protocol/protocol_test.go`, ambos no repositório
+`github.com/mateuslh/lealing-sdk`. Esses testes são a referência, não uma
+suíte copiada de outro repositório.
 
 ### 10.4 Segurança visual
 
@@ -827,7 +844,7 @@ o intervalo da engine e o da tool.
 
 Antes de publicar, confirme:
 
-- o módulo importa somente `sdk/*`, nunca `internal/*` da engine?
+- o módulo importa somente `github.com/mateuslh/lealing-sdk/*`, nunca `internal/*` da engine?
 - ID e SemVer são estáveis e publicáveis?
 - manifest e binário estão na raiz de cada pacote?
 - plataformas declaradas possuem artefato real?

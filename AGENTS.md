@@ -5,9 +5,14 @@ engine: controla terminal, catálogo instalado, busca, favoritos, marketplace,
 instalação, atualização, sincronização, segurança e o protocolo entre
 processos. Implementações concretas de tools não pertencem aqui.
 
-O guia normativo para autores está em `docs/tool-development.md`; os contratos
-executáveis ficam nos SDKs públicos e nos validadores deste repositório. O
-repositório [`github.com/mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools)
+O guia normativo para autores está em `docs/tool-development.md`; o contrato
+executável do SDK vive em
+[`github.com/mateuslh/lealing-sdk`](https://github.com/mateuslh/lealing-sdk),
+um repositório independente — **não faz parte desta engine**. Este
+repositório só referencia uma versão publicada do SDK como dependência de
+`go.mod`; ele não define, testa nem publica o comportamento do SDK, e uma
+mudança no SDK nunca é feita aqui. O repositório
+[`github.com/mateuslh/lealing-tools`](https://github.com/mateuslh/lealing-tools)
 é somente a origem de marketplace configurada por padrão e um exemplo não
 normativo de consumidor. A engine não conhece seus IDs, domínio, adapters,
 telas ou executáveis; conhece apenas índices, manifests e o protocolo público.
@@ -192,14 +197,16 @@ restante do código recebe uma interface do core.
 
 Este repositório mantém o contrato público, não as verticais que o utilizam.
 Uma tool `screen-v1` vive em seu próprio módulo e pode importar somente APIs
-públicas:
+públicas do SDK independente:
 
-- `github.com/mateuslh/lealing/sdk/protocol`;
-- `github.com/mateuslh/lealing/sdk/screen`;
-- `github.com/mateuslh/lealing/sdk/component`;
-- `github.com/mateuslh/lealing/sdk/machine`.
+- `github.com/mateuslh/lealing-sdk/protocol`;
+- `github.com/mateuslh/lealing-sdk/screen`;
+- `github.com/mateuslh/lealing-sdk/component`;
+- `github.com/mateuslh/lealing-sdk/machine`.
 
-Ela nunca importa `github.com/mateuslh/lealing/internal`.
+Ela nunca importa `github.com/mateuslh/lealing/internal` nem depende de
+código desta engine além do binário usado para validar manifest
+(`cmd/lealing -tool-validate`, via `go run`).
 
 O pacote instalado contém `manifest.yaml` e o executável da plataforma. O
 manifest usa `apiVersion: lealing.dev/v1`, runtime declarativo e permissões
@@ -406,7 +413,8 @@ causa e publique uma versão nova. Nunca use `--no-verify`.
 - mantenha operações destrutivas explícitas, confirmadas e recuperáveis quando
   possível;
 - preserve IDs persistidos e compatibilidade de protocolo;
-- uma mudança no SDK considera consumidores externos e negociação de versão;
+- atualizar a versão do SDK referenciada em `go.mod` é deliberado: leia o
+  changelog da tag nova antes de subir `github.com/mateuslh/lealing-sdk`;
 - mudanças no contrato público atualizam `docs/tool-development.md`;
 - a engine nunca passa a depender do conteúdo atual da origem padrão.
 
@@ -420,10 +428,10 @@ causa e publique uma versão nova. Nunca use `--no-verify`.
 | Portas de saída compartilhadas | `internal/core/port/outbound/outbound.go` |
 | Casos de uso | `internal/core/service/` |
 | Manifest | `internal/toolmanifest/` |
-| DTOs e framing | `sdk/protocol/` |
-| Runtime Go externo | `sdk/screen/` |
-| Componentes públicos | `sdk/component/` |
-| Plataforma, processos e arquivos públicos | `sdk/machine/` |
+| DTOs e framing (repositório externo) | `github.com/mateuslh/lealing-sdk` → `protocol/` |
+| Runtime Go externo (repositório externo) | `github.com/mateuslh/lealing-sdk` → `screen/` |
+| Componentes públicos (repositório externo) | `github.com/mateuslh/lealing-sdk` → `component/` |
+| Plataforma, processos e arquivos públicos (repositório externo) | `github.com/mateuslh/lealing-sdk` → `machine/` |
 | Tela genérica de extensão | `internal/adapter/inbound/tui/screen/plugin/` |
 | Processo e handshake | `internal/adapter/outbound/pluginprocess/` |
 | Catálogo instalado | `internal/adapter/outbound/externalcatalog/` |

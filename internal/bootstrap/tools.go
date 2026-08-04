@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/mateuslh/lealing-sdk/protocol"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/externalcatalog"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/marketplacefile"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/marketplacehttp"
@@ -23,7 +24,6 @@ import (
 	"github.com/mateuslh/lealing/internal/platform/logging"
 	"github.com/mateuslh/lealing/internal/platform/xdg"
 	"github.com/mateuslh/lealing/internal/toolmanifest"
-	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 // DefaultMarketplaceURL é o índice público consolidado. O endereço não

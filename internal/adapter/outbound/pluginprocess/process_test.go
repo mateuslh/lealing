@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateuslh/lealing-sdk/protocol"
 	"github.com/mateuslh/lealing/internal/adapter/outbound/pluginprocess"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/interactive"
-	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 func TestMain(m *testing.M) {

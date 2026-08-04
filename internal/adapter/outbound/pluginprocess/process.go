@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mateuslh/lealing-sdk/protocol"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	"github.com/mateuslh/lealing/internal/core/interactive"
 	"github.com/mateuslh/lealing/internal/core/port/outbound"
-	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 type Config struct {

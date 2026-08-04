@@ -13,8 +13,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/mateuslh/lealing-sdk/protocol"
 	"github.com/mateuslh/lealing/internal/core/domain"
-	"github.com/mateuslh/lealing/sdk/protocol"
 )
 
 const (
