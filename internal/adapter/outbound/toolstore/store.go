@@ -251,6 +251,41 @@ func (s *Store) list(ctx context.Context) ([]toolinstall.Installed, error) {
 	return installed, nil
 }
 
+// ActivePermissions lê as permissões declaradas pelo manifest da versão
+// atualmente ativa de uma tool, sem tocar no executável. Um manifest ativo
+// corrompido ou ilegível é erro — nunca é tratado como ausência de
+// permissão, porque o chamador usaria esse resultado para decidir se uma
+// atualização amplia o que a tool pode fazer.
+func (s *Store) ActivePermissions(ctx context.Context, id string) (toolinstall.ToolPermissions, bool, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := ctx.Err(); err != nil {
+		return toolinstall.ToolPermissions{}, false, err
+	}
+	if err := safeID(id); err != nil {
+		return toolinstall.ToolPermissions{}, false, err
+	}
+	idDir := filepath.Join(s.root, id)
+	active, err := readPointer(idDir, "active")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return toolinstall.ToolPermissions{}, false, nil
+		}
+		return toolinstall.ToolPermissions{}, false, err
+	}
+	manifest, _, err := s.validateInstalled(idDir, id, active)
+	if err != nil {
+		return toolinstall.ToolPermissions{}, false, fmt.Errorf("ler permissões ativas de %s: %w", id, err)
+	}
+	return toolinstall.ToolPermissions{
+		ReadPaths:  append([]string(nil), manifest.Permissions.Filesystem.Read...),
+		WritePaths: append([]string(nil), manifest.Permissions.Filesystem.Write...),
+		Network:    manifest.Permissions.Network,
+		Subprocess: manifest.Permissions.Subprocess,
+		WorkingDir: manifest.Permissions.WorkingDir,
+	}, true, nil
+}
+
 func (s *Store) Rollback(ctx context.Context, id string) (toolinstall.Installation, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

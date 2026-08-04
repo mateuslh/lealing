@@ -15,7 +15,12 @@ type Manager interface {
 	CompleteLogin(ctx context.Context, code DeviceCode) (Identity, error)
 	Logout(ctx context.Context) error
 	Push(ctx context.Context, force bool) (Result, error)
-	Pull(ctx context.Context, force bool) (Result, error)
+	// Pull reproduz o estado remoto nesta máquina. Quando alguma tool
+	// atualizada pede permissão que a versão ativa não tinha, Pull recusa
+	// com *toolinstall.PermissionEscalationError (verificável com
+	// errors.As) e não muda nada, a menos que acceptPermissionEscalation
+	// seja verdadeiro.
+	Pull(ctx context.Context, force, acceptPermissionEscalation bool) (Result, error)
 	SetSection(ctx context.Context, section Section, enabled bool) error
 }
 
@@ -219,7 +224,7 @@ func (s *Service) Push(ctx context.Context, force bool) (Result, error) {
 }
 
 // Pull traz o estado remoto para esta máquina.
-func (s *Service) Pull(ctx context.Context, force bool) (Result, error) {
+func (s *Service) Pull(ctx context.Context, force, acceptPermissionEscalation bool) (Result, error) {
 	credential, settings, err := s.session(ctx)
 	if err != nil {
 		return Result{}, err
@@ -249,7 +254,7 @@ func (s *Service) Pull(ctx context.Context, force bool) (Result, error) {
 		}
 	}
 
-	applied, err := s.config.Local.Apply(ctx, snapshot.State, selection)
+	applied, err := s.config.Local.Apply(ctx, snapshot.State, selection, acceptPermissionEscalation)
 	if err != nil {
 		return Result{}, err
 	}

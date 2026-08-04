@@ -21,14 +21,16 @@ type fakeToolManager struct {
 }
 
 type fakeMarketplace struct {
-	list     []marketplace.Listing
-	statuses []marketplace.SourceStatus
-	origins  []marketplace.Origin
-	install  toolinstall.Installation
-	id       string
-	added    marketplace.Origin
-	removed  string
-	toggled  string
+	list       []marketplace.Listing
+	statuses   []marketplace.SourceStatus
+	origins    []marketplace.Origin
+	install    toolinstall.Installation
+	installErr error
+	id         string
+	opts       marketplace.InstallOptions
+	added      marketplace.Origin
+	removed    string
+	toggled    string
 }
 
 type fakeToolManagement struct {
@@ -52,9 +54,9 @@ func (f *fakeMarketplace) Catalog(context.Context) (marketplace.Catalog, error) 
 	return marketplace.Catalog{Tools: f.list, Sources: f.statuses}, nil
 }
 func (f *fakeMarketplace) List(context.Context) ([]marketplace.Listing, error) { return f.list, nil }
-func (f *fakeMarketplace) Install(_ context.Context, id string) (toolinstall.Installation, error) {
-	f.id = id
-	return f.install, nil
+func (f *fakeMarketplace) Install(_ context.Context, id string, opts marketplace.InstallOptions) (toolinstall.Installation, error) {
+	f.id, f.opts = id, opts
+	return f.install, f.installErr
 }
 func (f *fakeMarketplace) Sources(context.Context) ([]marketplace.Origin, error) {
 	return f.origins, nil

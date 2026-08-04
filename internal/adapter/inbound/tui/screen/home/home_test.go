@@ -615,7 +615,7 @@ func (f fakeMarketplace) Catalog(context.Context) (coremarket.Catalog, error) {
 func (f fakeMarketplace) List(context.Context) ([]coremarket.Listing, error) {
 	return f.catalog.Tools, nil
 }
-func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installation, error) {
+func (fakeMarketplace) Install(context.Context, string, coremarket.InstallOptions) (toolinstall.Installation, error) {
 	return toolinstall.Installation{}, nil
 }
 func (fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) { return nil, nil }

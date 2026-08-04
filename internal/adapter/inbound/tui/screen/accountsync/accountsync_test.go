@@ -11,6 +11,7 @@ import (
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui/theme"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
@@ -18,14 +19,16 @@ type fakeManager struct {
 	status usersync.Status
 	code   usersync.DeviceCode
 
-	pushErr error
-	pullErr error
+	pushErr       error
+	pullErr       error
+	escalationErr *toolinstall.PermissionEscalationError
 
-	pushForces []bool
-	pullForces []bool
-	sections   map[usersync.Section]bool
-	loggedOut  bool
-	wait       bool
+	pushForces  []bool
+	pullForces  []bool
+	pullAccepts []bool
+	sections    map[usersync.Section]bool
+	loggedOut   bool
+	wait        bool
 }
 
 type fakeActions struct {
@@ -68,8 +71,12 @@ func (f *fakeManager) Push(_ context.Context, force bool) (usersync.Result, erro
 	}
 	return usersync.Result{State: f.status.Local}, nil
 }
-func (f *fakeManager) Pull(_ context.Context, force bool) (usersync.Result, error) {
+func (f *fakeManager) Pull(_ context.Context, force, acceptPermissionEscalation bool) (usersync.Result, error) {
 	f.pullForces = append(f.pullForces, force)
+	f.pullAccepts = append(f.pullAccepts, acceptPermissionEscalation)
+	if f.escalationErr != nil && !acceptPermissionEscalation {
+		return usersync.Result{}, f.escalationErr
+	}
 	if f.pullErr != nil && !force {
 		return usersync.Result{}, f.pullErr
 	}
@@ -214,6 +221,42 @@ func TestPushExigeConfirmacaoEConflitoExigeForcaExplicita(t *testing.T) {
 	}
 	if command == nil {
 		t.Fatal("push concluído não recarregou o status")
+	}
+}
+
+// Aplicar o estado remoto pode atualizar tools que pedem permissão nova; a
+// tela precisa mostrar um segundo diálogo específico antes de repetir o
+// Pull já aprovado — nunca conceder a permissão no primeiro "sim" genérico.
+func TestPullComEscaladaDePermissaoExigeSegundaConfirmacao(t *testing.T) {
+	manager := &fakeManager{status: connectedStatus(), escalationErr: &toolinstall.PermissionEscalationError{
+		Escalations: []toolinstall.ToolPermissionEscalation{
+			{ID: "demo", Added: toolinstall.ToolPermissions{Network: true}},
+		},
+	}}
+	model := loadedModel(t, manager)
+	model.cursor = len(usersync.AllSections) + 1
+
+	model, command := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if command != nil || model.confirmation == nil || len(manager.pullAccepts) != 0 {
+		t.Fatal("pull começou antes da primeira confirmação")
+	}
+
+	model, command = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, _ = updateModel(t, model, command())
+	if model.confirmation == nil || !model.confirmation.acceptPermissions {
+		t.Fatal("escalada de permissão não abriu o segundo diálogo")
+	}
+	if len(manager.pullAccepts) != 1 || manager.pullAccepts[0] {
+		t.Fatalf("primeira tentativa não podia vir com aceite: %v", manager.pullAccepts)
+	}
+
+	model, command = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model, command = updateModel(t, model, command())
+	if len(manager.pullAccepts) != 2 || manager.pullAccepts[0] || !manager.pullAccepts[1] {
+		t.Fatalf("tentativas de pull = %v", manager.pullAccepts)
+	}
+	if command == nil {
+		t.Fatal("pull concluído não recarregou o status")
 	}
 }
 

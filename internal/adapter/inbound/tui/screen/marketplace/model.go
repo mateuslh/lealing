@@ -156,6 +156,7 @@ type sourcesMsg struct {
 }
 
 type installedMsg struct {
+	ref          string
 	installation toolinstall.Installation
 	err          error
 }
@@ -224,13 +225,13 @@ func (m *Model) loadManaged() tea.Cmd {
 	}
 }
 
-func (m *Model) install(ref string) tea.Cmd {
+func (m *Model) install(ref string, permissionsAccepted bool) tea.Cmd {
 	manager := m.manager
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		installation, err := manager.Install(ctx, ref)
-		return installedMsg{installation: installation, err: err}
+		installation, err := manager.Install(ctx, ref, coremarket.InstallOptions{PermissionsAccepted: permissionsAccepted})
+		return installedMsg{ref: ref, installation: installation, err: err}
 	}
 }
 

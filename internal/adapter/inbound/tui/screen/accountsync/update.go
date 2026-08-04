@@ -3,10 +3,12 @@ package accountsync
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/mateuslh/lealing/internal/adapter/inbound/tui"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
@@ -102,6 +104,12 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 		if errors.Is(message.err, usersync.ErrConflict) {
 			m.err = nil
 			m.confirmation = conflictConfirmation(message.operation)
+			return m, nil
+		}
+		var escalation *toolinstall.PermissionEscalationError
+		if errors.As(message.err, &escalation) {
+			m.err = nil
+			m.confirmation = permissionEscalationConfirmation(message.operation, escalation)
 			return m, nil
 		}
 		if message.err != nil {
@@ -231,10 +239,10 @@ func (m *Model) handleConfirmation(key tea.KeyMsg) (tui.Screen, tea.Cmd) {
 		switch selected.operation {
 		case operationPush:
 			m.busy = "enviando preferências…"
-			return m, m.synchronize(operationPush, selected.force)
+			return m, m.synchronize(operationPush, selected.force, false)
 		case operationPull:
 			m.busy = "baixando e aplicando preferências…"
-			return m, m.synchronize(operationPull, selected.force)
+			return m, m.synchronize(operationPull, selected.force, selected.acceptPermissions)
 		case operationLogout:
 			m.busy = "removendo a credencial desta máquina…"
 			return m, m.logout()
@@ -269,6 +277,43 @@ func normalConfirmation(selected operation, status usersync.Status) *confirmatio
 	default:
 		return &confirmation{operation: selected, title: "Desconectar esta conta?", message: "A credencial será removida desta máquina. O repositório e a autorização do OAuth App permanecerão no GitHub."}
 	}
+}
+
+// permissionEscalationConfirmation é o segundo diálogo do Pull declarativo:
+// aplicar o estado remoto pode atualizar tools, e uma delas pode pedir
+// permissão que a versão ativa não tinha. Nada muda em disco até o usuário
+// ver esta lista e confirmar de novo.
+func permissionEscalationConfirmation(selected operation, escalation *toolinstall.PermissionEscalationError) *confirmation {
+	var parts []string
+	for _, item := range escalation.Escalations {
+		parts = append(parts, item.ID+" pede "+addedPermissionsSummary(item.Added))
+	}
+	message := "O estado remoto amplia o que estas tools podem fazer: " + strings.Join(parts, "; ") +
+		". A versão ativa de cada uma continua no lugar até você aprovar."
+	return &confirmation{
+		operation: selected, acceptPermissions: true,
+		title: "Conceder novas permissões?", message: message,
+	}
+}
+
+func addedPermissionsSummary(added toolinstall.ToolPermissions) string {
+	var parts []string
+	if total := len(added.ReadPaths) + len(added.WritePaths); total > 0 {
+		parts = append(parts, fmt.Sprintf("%d caminho(s) de arquivo", total))
+	}
+	if added.Network {
+		parts = append(parts, "acesso à rede")
+	}
+	if added.Subprocess {
+		parts = append(parts, "subprocessos")
+	}
+	if added.WorkingDir != "" {
+		parts = append(parts, "diretório de trabalho ("+added.WorkingDir+")")
+	}
+	if len(parts) == 0 {
+		return "novas permissões"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func conflictConfirmation(selected operation) *confirmation {

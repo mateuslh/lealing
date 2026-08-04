@@ -840,6 +840,23 @@ Tool, engine e protocolo têm versões independentes:
 Teste incompatibilidade sem iniciar recursos da tool. A mensagem deve mostrar
 o intervalo da engine e o da tool.
 
+### 14.1 Ampliar `permissions` exige aprovação do usuário na atualização
+
+Publicar uma versão que declara mais em `permissions` (novo caminho de
+`filesystem`, `network: true`, `subprocess: true` ou `workingDir` subindo de
+nível) do que a versão ativa dos usuários não é uma mudança silenciosa. A
+engine detecta a diferença antes de trocar a versão ativa, recusa a
+atualização com um erro que carrega exatamente o que é novo, e só aplica
+depois que o usuário vê essa diferença e aprova — seja no segundo diálogo da
+tela de marketplace, seja repetindo `-tool-install`/`-sync-pull` com a flag
+de aprovação explícita. A versão instalada continua ativa até a aprovação.
+
+Isso não muda nada no manifest nem no processo de publicação: é
+comportamento da engine ao processar a atualização, não um campo novo para
+declarar. Descrever a permissão com precisão continua sendo o que faz essa
+aprovação significar algo — um manifest que já pede mais do que usa infla o
+diálogo sem motivo.
+
 ## 15. Definição de pronto
 
 Antes de publicar, confirme:

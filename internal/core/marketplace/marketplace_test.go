@@ -171,16 +171,20 @@ func (m *memorySources) Save(_ context.Context, state marketplace.SourceState) e
 }
 
 type fakeInstaller struct {
-	installed   []toolinstall.Installed
-	request     toolinstall.InstallRequest
-	previous    []toolinstall.Installed
-	reconciled  int
-	restored    bool
-	onReconcile func()
+	installed     []toolinstall.Installed
+	request       toolinstall.InstallRequest
+	previous      []toolinstall.Installed
+	reconciled    int
+	restored      bool
+	onReconcile   func()
+	escalationErr *toolinstall.PermissionEscalationError
 }
 
 func (f *fakeInstaller) InstallLocal(_ context.Context, request toolinstall.InstallRequest) (toolinstall.Installation, error) {
 	f.request = request
+	if f.escalationErr != nil && !request.PermissionsAccepted {
+		return toolinstall.Installation{}, f.escalationErr
+	}
 	return toolinstall.Installation{ID: request.ExpectedID, Version: request.ExpectedVersion}, nil
 }
 func (f *fakeInstaller) ListInstalled(context.Context) ([]toolinstall.Installed, error) {
@@ -297,7 +301,7 @@ func TestServiceInstalaPacoteSelecionadoERecarregaCatalogo(t *testing.T) {
 	reloader := &fakeReloader{}
 	service := testService(installer, packages, reloader)
 
-	installation, err := service.Install(context.Background(), "demo")
+	installation, err := service.Install(context.Background(), "demo", marketplace.InstallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,11 +313,37 @@ func TestServiceInstalaPacoteSelecionadoERecarregaCatalogo(t *testing.T) {
 	}
 }
 
+func TestServiceInstalaPropagaEscaladaDePermissaoEProssegueComAceite(t *testing.T) {
+	packages := &fakePackages{prepared: marketplace.PreparedPackage{Directory: "/tmp/demo"}}
+	installer := &fakeInstaller{escalationErr: &toolinstall.PermissionEscalationError{
+		Escalations: []toolinstall.ToolPermissionEscalation{
+			{ID: "demo", Added: toolinstall.ToolPermissions{Network: true}},
+		},
+	}}
+	service := testService(installer, packages, &fakeReloader{})
+
+	_, err := service.Install(context.Background(), "demo", marketplace.InstallOptions{})
+	var escalation *toolinstall.PermissionEscalationError
+	if !errors.As(err, &escalation) {
+		t.Fatalf("Install = %v, queria *toolinstall.PermissionEscalationError", err)
+	}
+	if installer.request.PermissionsAccepted {
+		t.Fatal("a primeira tentativa não podia vir com PermissionsAccepted")
+	}
+
+	if _, err := service.Install(context.Background(), "demo", marketplace.InstallOptions{PermissionsAccepted: true}); err != nil {
+		t.Fatalf("a segunda tentativa, já aprovada, deveria ter sucesso: %v", err)
+	}
+	if !installer.request.PermissionsAccepted {
+		t.Fatal("a segunda tentativa deveria repassar a aprovação ao request")
+	}
+}
+
 func TestServiceNaoBaixaVersaoJaAtiva(t *testing.T) {
 	packages := &fakePackages{}
 	installer := &fakeInstaller{installed: []toolinstall.Installed{{ID: "demo", ActiveVersion: "1.2.0"}}}
 	service := testService(installer, packages, &fakeReloader{})
-	_, err := service.Install(context.Background(), "demo")
+	_, err := service.Install(context.Background(), "demo", marketplace.InstallOptions{})
 	if !errors.Is(err, marketplace.ErrAlreadyLatest) {
 		t.Fatalf("Install = %v", err)
 	}
@@ -425,7 +455,7 @@ func TestOrigemDeMaiorPrioridadeVenceConflitoDeID(t *testing.T) {
 
 	// A referência qualificada continua permitindo instalar a outra de
 	// propósito: a prioridade protege o padrão, não proíbe a escolha.
-	if _, err := service.Install(context.Background(), "impostor/demo"); err != nil {
+	if _, err := service.Install(context.Background(), "impostor/demo", marketplace.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if packages.origin.Name != "impostor" {

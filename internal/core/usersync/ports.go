@@ -99,7 +99,7 @@ type Applied map[Section]int
 // diferente da engine; o composition root é quem os reúne.
 type Local interface {
 	Collect(ctx context.Context) (State, error)
-	Apply(ctx context.Context, state State, selection Selection) (Applied, error)
+	Apply(ctx context.Context, state State, selection Selection, acceptPermissionEscalation bool) (Applied, error)
 }
 
 // Settings é o que fica no disco desta máquina sobre a sincronização.

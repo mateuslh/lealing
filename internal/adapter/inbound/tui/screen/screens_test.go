@@ -40,7 +40,7 @@ func (f fakeMarketplace) Catalog(context.Context) (coremarket.Catalog, error) {
 	return coremarket.Catalog{Tools: f.tools}, nil
 }
 func (f fakeMarketplace) List(context.Context) ([]coremarket.Listing, error) { return f.tools, nil }
-func (fakeMarketplace) Install(context.Context, string) (toolinstall.Installation, error) {
+func (fakeMarketplace) Install(context.Context, string, coremarket.InstallOptions) (toolinstall.Installation, error) {
 	return toolinstall.Installation{}, nil
 }
 func (f fakeMarketplace) Sources(context.Context) ([]coremarket.Origin, error) { return f.origins, nil }
@@ -96,7 +96,7 @@ func (fakeSync) Logout(context.Context) error { return nil }
 func (fakeSync) Push(context.Context, bool) (usersync.Result, error) {
 	return usersync.Result{}, nil
 }
-func (fakeSync) Pull(context.Context, bool) (usersync.Result, error) {
+func (fakeSync) Pull(context.Context, bool, bool) (usersync.Result, error) {
 	return usersync.Result{}, nil
 }
 func (fakeSync) SetSection(context.Context, usersync.Section, bool) error { return nil }

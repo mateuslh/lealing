@@ -51,6 +51,40 @@ func store(root string) *toolstore.Store {
 	return toolstore.New(root, []domain.Category{{ID: "ai", Name: "IA"}}, toolmanifest.Target{OS: "darwin", Arch: "arm64"}, nil)
 }
 
+// sourceWithNetwork é como source, mas declara acesso à rede — usado para
+// exercitar ActivePermissions com um manifest que não tem tudo em falso.
+func sourceWithNetwork(t *testing.T, version, executableBody string) string {
+	t.Helper()
+	dir := t.TempDir()
+	manifest := strings.ReplaceAll(`apiVersion: lealing.dev/v1
+id: demo
+version: VERSION
+name: Demo
+summary: Tool local de demonstração.
+detail: Teste.
+category: ai
+risk: safe
+runtime:
+  kind: process
+  protocol: {min: 1, max: 1}
+  executable: demo-tool
+ui: {mode: screen-v1}
+platforms: [darwin-arm64]
+requirements: []
+permissions:
+  filesystem: {read: ["~/proj"], write: []}
+  network: true
+  subprocess: false
+`, "VERSION", version)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "demo-tool"), []byte(executableBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestInstallVerificaChecksumETrocaVersaoAtiva(t *testing.T) {
 	root := t.TempDir()
 	first := source(t, "1.0.0", "primeiro")
@@ -227,6 +261,80 @@ func TestRemoveMoveParaDiretorioRecuperavel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "demo")); !os.IsNotExist(err) {
 		t.Fatal("tool continuou ativa")
+	}
+}
+
+func TestActivePermissionsSemInstalacaoNaoEErro(t *testing.T) {
+	root := t.TempDir()
+	permissions, installed, err := store(root).ActivePermissions(context.Background(), "demo")
+	if err != nil {
+		t.Fatalf("ActivePermissions sem instalação devolveu erro: %v", err)
+	}
+	if installed {
+		t.Fatal("installed = true para tool nunca instalada")
+	}
+	if !permissions.Empty() {
+		t.Fatalf("permissões = %+v, queria vazio", permissions)
+	}
+}
+
+func TestActivePermissionsLeADaVersaoAtiva(t *testing.T) {
+	root := t.TempDir()
+	s := store(root)
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{SourceDir: sourceWithNetwork(t, "1.0.0", "ok")}); err != nil {
+		t.Fatal(err)
+	}
+	permissions, installed, err := s.ActivePermissions(context.Background(), "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installed {
+		t.Fatal("installed = false após instalação")
+	}
+	if !permissions.Network || len(permissions.ReadPaths) != 1 || permissions.ReadPaths[0] != "~/proj" {
+		t.Fatalf("permissões = %+v", permissions)
+	}
+}
+
+// TestActivePermissionsAtualizaAposTrocaDeVersao garante que a leitura
+// reflete a versão ativa corrente, não uma versão antiga que ficou para trás
+// como "previous".
+func TestActivePermissionsAtualizaAposTrocaDeVersao(t *testing.T) {
+	root := t.TempDir()
+	s := store(root)
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{SourceDir: source(t, "1.0.0", "primeiro")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{SourceDir: sourceWithNetwork(t, "1.1.0", "segundo")}); err != nil {
+		t.Fatal(err)
+	}
+	permissions, installed, err := s.ActivePermissions(context.Background(), "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installed || !permissions.Network {
+		t.Fatalf("permissões após atualização = %+v installed=%v", permissions, installed)
+	}
+}
+
+func TestActivePermissionsManifestCorrompidoEErroNaoAusenciaDePermissao(t *testing.T) {
+	root := t.TempDir()
+	s := store(root)
+	if _, err := s.Install(context.Background(), toolinstall.InstallRequest{SourceDir: sourceWithNetwork(t, "1.0.0", "ok")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "demo", "1.0.0", "manifest.yaml"), []byte("não é yaml válido: [["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	permissions, installed, err := s.ActivePermissions(context.Background(), "demo")
+	if err == nil {
+		t.Fatal("manifest corrompido deveria falhar, não devolver permissões vazias")
+	}
+	if installed {
+		t.Fatal("installed não deveria ser true junto com um erro")
+	}
+	if !permissions.Empty() {
+		t.Fatalf("permissões deveriam vir zeradas junto com o erro, veio %+v", permissions)
 	}
 }
 

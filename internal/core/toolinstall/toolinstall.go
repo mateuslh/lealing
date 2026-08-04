@@ -27,6 +27,111 @@ type InstallRequest struct {
 	ExpectedID       string
 	ExpectedVersion  string
 	ExpectedManifest *ManifestExpectation
+	// PermissionsAccepted sinaliza que o usuário já viu e aprovou a
+	// ampliação de permissão desta atualização (ver PermissionEscalationError).
+	// Sem instalação anterior, ou sem ampliação nenhuma, esta flag não faz
+	// diferença.
+	PermissionsAccepted bool
+}
+
+// ToolPermissions é o subconjunto do manifest relevante para decidir se uma
+// atualização amplia o que uma tool pode fazer.
+type ToolPermissions struct {
+	ReadPaths  []string
+	WritePaths []string
+	Network    bool
+	Subprocess bool
+	// WorkingDir é "", "read" ou "write".
+	WorkingDir string
+}
+
+// Empty reporta se nenhuma permissão está presente.
+func (p ToolPermissions) Empty() bool {
+	return len(p.ReadPaths) == 0 && len(p.WritePaths) == 0 &&
+		!p.Network && !p.Subprocess && p.WorkingDir == ""
+}
+
+// PermissionsAdded calcula só o que newPermissions tem e oldPermissions não
+// tinha. Remoção de permissão nunca conta como escalada — só o que uma tool
+// passa a poder fazer que antes não podia importa para a aprovação do
+// usuário.
+func PermissionsAdded(oldPermissions, newPermissions ToolPermissions) ToolPermissions {
+	return ToolPermissions{
+		ReadPaths:  pathsAdded(oldPermissions.ReadPaths, newPermissions.ReadPaths),
+		WritePaths: pathsAdded(oldPermissions.WritePaths, newPermissions.WritePaths),
+		Network:    !oldPermissions.Network && newPermissions.Network,
+		Subprocess: !oldPermissions.Subprocess && newPermissions.Subprocess,
+		WorkingDir: workingDirAdded(oldPermissions.WorkingDir, newPermissions.WorkingDir),
+	}
+}
+
+func pathsAdded(oldPaths, newPaths []string) []string {
+	existing := make(map[string]bool, len(oldPaths))
+	for _, path := range oldPaths {
+		existing[path] = true
+	}
+	var added []string
+	for _, path := range newPaths {
+		if !existing[path] {
+			added = append(added, path)
+		}
+	}
+	return added
+}
+
+// workingDirRank ordena "" < "read" < "write": subir de nível também é
+// escalada, mesmo quando o campo já não estava vazio.
+func workingDirRank(value string) int {
+	switch value {
+	case "write":
+		return 2
+	case "read":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func workingDirAdded(oldValue, newValue string) string {
+	if workingDirRank(newValue) > workingDirRank(oldValue) {
+		return newValue
+	}
+	return ""
+}
+
+func permissionsFromExpectation(expectation ManifestExpectation) ToolPermissions {
+	return ToolPermissions{
+		ReadPaths:  expectation.FilesystemRead,
+		WritePaths: expectation.FilesystemWrite,
+		Network:    expectation.Network,
+		Subprocess: expectation.Subprocess,
+		WorkingDir: expectation.WorkingDir,
+	}
+}
+
+// ToolPermissionEscalation descreve, para uma tool já instalada, as
+// permissões que a versão nova pede além da versão ativa.
+type ToolPermissionEscalation struct {
+	ID    string
+	Added ToolPermissions
+}
+
+// PermissionEscalationError bloqueia uma instalação ou reconciliação porque
+// ao menos uma tool pede permissão que sua versão ativa não tinha. A
+// operação inteira não é aplicada quando este erro é devolvido — nada muda
+// em disco. Quem chamou mostra Escalations ao usuário e, só depois de
+// aprovação explícita, repete a mesma operação com PermissionsAccepted (ou
+// o equivalente de mais alto nível) true.
+type PermissionEscalationError struct {
+	Escalations []ToolPermissionEscalation
+}
+
+func (e *PermissionEscalationError) Error() string {
+	ids := make([]string, len(e.Escalations))
+	for i, escalation := range e.Escalations {
+		ids[i] = escalation.ID
+	}
+	return fmt.Sprintf("permissão ampliada sem aprovação do usuário: %s", strings.Join(ids, ", "))
 }
 
 // ManifestExpectation fixa os campos exibidos e negociados pelo marketplace.
@@ -77,6 +182,11 @@ type Store interface {
 	List(ctx context.Context) ([]Installed, error)
 	Rollback(ctx context.Context, id string) (Installation, error)
 	Remove(ctx context.Context, id string) (Removal, error)
+	// ActivePermissions devolve as permissões declaradas pela versão
+	// atualmente ativa de uma tool, sem executá-la. installed é falso e o
+	// erro é nil quando a tool simplesmente ainda não está instalada; um
+	// manifest ativo corrompido ou ilegível é erro, nunca "sem permissão".
+	ActivePermissions(ctx context.Context, id string) (permissions ToolPermissions, installed bool, err error)
 }
 
 // Manager é a porta de entrada consumida pela CLI e, futuramente, pelo
@@ -124,6 +234,9 @@ func (s *Service) InstallLocal(ctx context.Context, request InstallRequest) (Ins
 			return Installation{}, ErrInvalidChecksum
 		}
 	}
+	if err := s.checkPermissionEscalations(ctx, []InstallRequest{request}); err != nil {
+		return Installation{}, err
+	}
 	return s.store.Install(ctx, request)
 }
 
@@ -161,7 +274,50 @@ func (s *Service) Reconcile(ctx context.Context, requests []InstallRequest) (Rec
 			return Reconciliation{}, errors.New("reconciliação exige ID e versão esperados")
 		}
 	}
+	if err := s.checkPermissionEscalations(ctx, requests); err != nil {
+		return Reconciliation{}, err
+	}
 	return store.Reconcile(ctx, requests)
+}
+
+// checkPermissionEscalations verifica, para cada request com manifest
+// esperado conhecido, se a tool já está instalada com permissões menores do
+// que as pedidas agora. Nenhuma mutação acontece enquanto esta função não
+// devolve nil: descoberta não executa, e aqui vale o mesmo princípio — a
+// verificação de permissão nunca troca a versão ativa por conta própria.
+func (s *Service) checkPermissionEscalations(ctx context.Context, requests []InstallRequest) error {
+	var escalations []ToolPermissionEscalation
+	for _, request := range requests {
+		if request.PermissionsAccepted || request.ExpectedID == "" || request.ExpectedManifest == nil {
+			continue
+		}
+		escalation, err := s.escalationFor(ctx, request)
+		if err != nil {
+			return err
+		}
+		if escalation != nil {
+			escalations = append(escalations, *escalation)
+		}
+	}
+	if len(escalations) == 0 {
+		return nil
+	}
+	return &PermissionEscalationError{Escalations: escalations}
+}
+
+func (s *Service) escalationFor(ctx context.Context, request InstallRequest) (*ToolPermissionEscalation, error) {
+	activePermissions, installed, err := s.store.ActivePermissions(ctx, request.ExpectedID)
+	if err != nil {
+		return nil, fmt.Errorf("consultar permissões ativas de %s: %w", request.ExpectedID, err)
+	}
+	if !installed {
+		return nil, nil
+	}
+	added := PermissionsAdded(activePermissions, permissionsFromExpectation(*request.ExpectedManifest))
+	if added.Empty() {
+		return nil, nil
+	}
+	return &ToolPermissionEscalation{ID: request.ExpectedID, Added: added}, nil
 }
 
 func (s *Service) Restore(ctx context.Context, reconciliation Reconciliation) error {

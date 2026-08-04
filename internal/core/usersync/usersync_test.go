@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 	"github.com/mateuslh/lealing/internal/core/usersync"
 )
 
@@ -75,14 +76,19 @@ func (f *fakeRemote) Write(
 func revisionName(n int) string { return "rev" + strings.Repeat("x", n) }
 
 type fakeLocal struct {
-	state   usersync.State
-	applied usersync.State
-	scope   usersync.Selection
+	state                      usersync.State
+	applied                    usersync.State
+	scope                      usersync.Selection
+	acceptPermissionEscalation bool
+	err                        error
 }
 
 func (f *fakeLocal) Collect(context.Context) (usersync.State, error) { return f.state, nil }
-func (f *fakeLocal) Apply(_ context.Context, state usersync.State, selection usersync.Selection) (usersync.Applied, error) {
-	f.applied, f.scope = state, selection
+func (f *fakeLocal) Apply(_ context.Context, state usersync.State, selection usersync.Selection, acceptPermissionEscalation bool) (usersync.Applied, error) {
+	f.applied, f.scope, f.acceptPermissionEscalation = state, selection, acceptPermissionEscalation
+	if f.err != nil {
+		return usersync.Applied{}, f.err
+	}
 	return usersync.Applied{usersync.SectionUsage: len(state.Usage)}, nil
 }
 
@@ -251,7 +257,7 @@ func TestPullAplicaSomenteAsSecoesLigadas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.service.Pull(context.Background(), false); err != nil {
+	if _, err := h.service.Pull(context.Background(), false, false); err != nil {
 		t.Fatal(err)
 	}
 	if h.local.scope.Enabled(usersync.SectionSources) {
@@ -262,13 +268,46 @@ func TestPullAplicaSomenteAsSecoesLigadas(t *testing.T) {
 	}
 }
 
+// A escalada de permissão detectada na reconciliação de tools precisa
+// chegar ao chamador de Pull sem aplicar nada, e só prosseguir quando ele
+// repetir com acceptPermissionEscalation.
+func TestPullPropagaEscaladaDePermissaoEProssegueComAceite(t *testing.T) {
+	h := newHarness(true)
+	h.remote.snapshot = usersync.Snapshot{
+		Revision: "remota",
+		State:    usersync.State{Version: usersync.StateVersion, UpdatedAt: fixedNow()},
+	}
+	h.local.err = &toolinstall.PermissionEscalationError{
+		Escalations: []toolinstall.ToolPermissionEscalation{
+			{ID: "demo", Added: toolinstall.ToolPermissions{Network: true}},
+		},
+	}
+
+	_, err := h.service.Pull(context.Background(), false, false)
+	var escalation *toolinstall.PermissionEscalationError
+	if !errors.As(err, &escalation) {
+		t.Fatalf("Pull = %v, queria *toolinstall.PermissionEscalationError", err)
+	}
+	if h.local.acceptPermissionEscalation {
+		t.Fatal("a primeira tentativa não podia repassar aceite")
+	}
+
+	h.local.err = nil
+	if _, err := h.service.Pull(context.Background(), false, true); err != nil {
+		t.Fatalf("Pull com aceite deveria ter sucesso: %v", err)
+	}
+	if !h.local.acceptPermissionEscalation {
+		t.Fatal("a segunda tentativa deveria repassar o aceite para Local.Apply")
+	}
+}
+
 func TestPullRecusaEstadoDeVersaoFutura(t *testing.T) {
 	h := newHarness(true)
 	h.remote.snapshot = usersync.Snapshot{
 		Revision: "remota",
 		State:    usersync.State{Version: usersync.StateVersion + 1},
 	}
-	_, err := h.service.Pull(context.Background(), false)
+	_, err := h.service.Pull(context.Background(), false, false)
 	if err == nil || !strings.Contains(err.Error(), "não suportado") {
 		t.Fatalf("Pull = %v", err)
 	}
@@ -277,7 +316,7 @@ func TestPullRecusaEstadoDeVersaoFutura(t *testing.T) {
 func TestPullSemNadaPublicadoDizIsso(t *testing.T) {
 	h := newHarness(true)
 	h.remote.snapshot = usersync.Snapshot{Missing: true}
-	if _, err := h.service.Pull(context.Background(), false); !errors.Is(err, usersync.ErrNoRemote) {
+	if _, err := h.service.Pull(context.Background(), false, false); !errors.Is(err, usersync.ErrNoRemote) {
 		t.Fatalf("Pull = %v", err)
 	}
 }
@@ -293,10 +332,10 @@ func TestPullDetectaMudancaLocalNaoEnviada(t *testing.T) {
 			Usage: []usersync.ToolUsage{{Host: "lealing", ID: "outra-coisa", Runs: 1}},
 		},
 	}
-	if _, err := h.service.Pull(context.Background(), false); !errors.Is(err, usersync.ErrConflict) {
+	if _, err := h.service.Pull(context.Background(), false, false); !errors.Is(err, usersync.ErrConflict) {
 		t.Fatalf("Pull = %v, quero conflito", err)
 	}
-	if _, err := h.service.Pull(context.Background(), true); err != nil {
+	if _, err := h.service.Pull(context.Background(), true, false); err != nil {
 		t.Fatalf("Pull com force = %v", err)
 	}
 }
@@ -306,7 +345,7 @@ func TestOperacoesRemotasExigemConta(t *testing.T) {
 	if _, err := h.service.Push(context.Background(), false); !errors.Is(err, usersync.ErrNotAuthenticated) {
 		t.Fatalf("Push sem conta = %v", err)
 	}
-	if _, err := h.service.Pull(context.Background(), false); !errors.Is(err, usersync.ErrNotAuthenticated) {
+	if _, err := h.service.Pull(context.Background(), false, false); !errors.Is(err, usersync.ErrNotAuthenticated) {
 		t.Fatalf("Pull sem conta = %v", err)
 	}
 }

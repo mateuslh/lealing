@@ -25,6 +25,7 @@ type fakeManager struct {
 
 	catalogs    int
 	installedID string
+	installOpts coremarket.InstallOptions
 	added       coremarket.Origin
 	removed     string
 	toggled     string
@@ -59,8 +60,12 @@ func (f *fakeManager) List(ctx context.Context) ([]coremarket.Listing, error) {
 	return catalog.Tools, err
 }
 
-func (f *fakeManager) Install(_ context.Context, ref string) (toolinstall.Installation, error) {
-	f.installedID = ref
+func (f *fakeManager) Install(_ context.Context, ref string, opts coremarket.InstallOptions) (toolinstall.Installation, error) {
+	f.installedID, f.installOpts = ref, opts
+	var escalation *toolinstall.PermissionEscalationError
+	if errors.As(f.installErr, &escalation) && opts.PermissionsAccepted {
+		return f.installation, nil
+	}
 	return f.installation, f.installErr
 }
 
@@ -169,7 +174,7 @@ func TestInstalacaoUsaReferenciaQualificadaERelataSucesso(t *testing.T) {
 	}
 	model := loaded(t, manager)
 
-	message := model.install(model.visible[0].Ref())()
+	message := model.install(model.visible[0].Ref(), false)()
 	if manager.installedID != "lealing/example-tool" {
 		t.Fatalf("referência instalada = %q", manager.installedID)
 	}
@@ -177,6 +182,43 @@ func TestInstalacaoUsaReferenciaQualificadaERelataSucesso(t *testing.T) {
 	view := next.View(tui.Frame{Width: 100, Height: 24})
 	if command == nil || !strings.Contains(view, "example-tool@1.0.0 instalada") {
 		t.Fatalf("sucesso não atualizou o estado nem pediu recarga: command=%v view=%q", command != nil, view)
+	}
+}
+
+// Uma atualização que amplia permissão não pode ser aplicada com o mesmo
+// "sim" genérico de sempre: o primeiro Install recusa, e só o segundo
+// diálogo (acionado por confirmPermissionEscalation) manda a aprovação.
+func TestInstalacaoComEscaladaDePermissaoAbreSegundaConfirmacao(t *testing.T) {
+	manager := &fakeManager{
+		catalog: coremarket.Catalog{Tools: []coremarket.Listing{fixture()}},
+		installErr: &toolinstall.PermissionEscalationError{
+			Escalations: []toolinstall.ToolPermissionEscalation{
+				{ID: "example-tool", Added: toolinstall.ToolPermissions{Network: true}},
+			},
+		},
+	}
+	model := loaded(t, manager)
+	ref := model.visible[0].Ref()
+
+	message := model.install(ref, false)()
+	if manager.installOpts.PermissionsAccepted {
+		t.Fatal("a primeira tentativa não podia vir com PermissionsAccepted")
+	}
+	next, command := model.Update(message)
+	if command == nil {
+		t.Fatal("escalada de permissão deveria navegar para um segundo diálogo, não apenas mostrar erro")
+	}
+	navigated, ok := next.(*Model)
+	if !ok {
+		t.Fatalf("tela = %T, quero *Model", next)
+	}
+	if navigated.err != nil {
+		t.Fatalf("escalada de permissão não pode aparecer como erro genérico: %v", navigated.err)
+	}
+
+	message = command()
+	if !isNavigate(message) {
+		t.Fatalf("mensagem = %T, quero NavigateMsg para o segundo diálogo", message)
 	}
 }
 

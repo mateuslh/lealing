@@ -119,7 +119,7 @@ func TestLocalStateNaoAplicaPreferenciaEmToolHomonima(t *testing.T) {
 	}}}
 	selection := usersync.Selection{usersync.SectionUsage: true}
 
-	applied, err := local.Apply(context.Background(), state, selection)
+	applied, err := local.Apply(context.Background(), state, selection, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestLocalStateGuardaPreferenciaDeToolAindaNaoInstalada(t *testing.T) {
 	}}}
 
 	if _, err := local.Apply(context.Background(), state,
-		usersync.Selection{usersync.SectionUsage: true}); err != nil {
+		usersync.Selection{usersync.SectionUsage: true}, false); err != nil {
 		t.Fatal(err)
 	}
 	got := usage.data["example-tool"]
@@ -189,7 +189,7 @@ func TestLocalStateNaoPersisteOrigemEmbutidaRecebidaComoCustom(t *testing.T) {
 	}}
 
 	applied, err := local.Apply(context.Background(), state,
-		usersync.Selection{usersync.SectionSources: true})
+		usersync.Selection{usersync.SectionSources: true}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestLocalStateAplicaOrigensEToolsComoUmaIntencaoExata(t *testing.T) {
 
 	applied, err := local.Apply(context.Background(), state, usersync.Selection{
 		usersync.SectionSources: true, usersync.SectionTools: true,
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -299,11 +299,22 @@ type Manager interface {
 	Catalog(ctx context.Context) (Catalog, error)
 	List(ctx context.Context) ([]Listing, error)
 	// Install aceita o ID simples ou a referência qualificada "origem/id".
-	Install(ctx context.Context, ref string) (toolinstall.Installation, error)
+	// Devolve *toolinstall.PermissionEscalationError (verificável com
+	// errors.As) sem instalar nada quando a versão nova pede permissão que
+	// a versão ativa não tinha e opts.PermissionsAccepted é falso.
+	Install(ctx context.Context, ref string, opts InstallOptions) (toolinstall.Installation, error)
 	Sources(ctx context.Context) ([]Origin, error)
 	AddSource(ctx context.Context, origin Origin) error
 	RemoveSource(ctx context.Context, name string) (SourceRemoval, error)
 	SetSourceEnabled(ctx context.Context, name string, enabled bool) error
+}
+
+// InstallOptions carrega decisões tomadas pelo driving adapter antes de
+// instalar ou atualizar uma tool. Mesmo desenho de inbound.LaunchOptions.
+type InstallOptions struct {
+	// PermissionsAccepted sinaliza que o usuário já viu o diálogo de
+	// ampliação de permissão desta atualização e confirmou.
+	PermissionsAccepted bool
 }
 
 type Config struct {
@@ -472,7 +483,7 @@ func (s *Service) fetchOrigin(ctx context.Context, origin Origin) ([]Entry, erro
 	return entries, nil
 }
 
-func (s *Service) Install(ctx context.Context, ref string) (toolinstall.Installation, error) {
+func (s *Service) Install(ctx context.Context, ref string, opts InstallOptions) (toolinstall.Installation, error) {
 	originName, id := splitRef(ref)
 	if id == "" {
 		return toolinstall.Installation{}, errors.New("ID da tool é obrigatório")
@@ -508,7 +519,7 @@ func (s *Service) Install(ctx context.Context, ref string) (toolinstall.Installa
 	if prepared.Cleanup != nil {
 		defer prepared.Cleanup()
 	}
-	installation, err := s.config.Installer.InstallLocal(ctx, installRequest(entry, prepared.Directory))
+	installation, err := s.config.Installer.InstallLocal(ctx, installRequest(entry, prepared.Directory, opts.PermissionsAccepted))
 	if err != nil {
 		return toolinstall.Installation{}, err
 	}

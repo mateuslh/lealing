@@ -34,8 +34,12 @@ const (
 type confirmation struct {
 	operation operation
 	force     bool
-	title     string
-	message   string
+	// acceptPermissions só se aplica a operationPull: sinaliza que o usuário
+	// já viu e aprovou a ampliação de permissão mostrada por
+	// permissionEscalationConfirmation.
+	acceptPermissions bool
+	title             string
+	message           string
 }
 
 type Model struct {
@@ -223,7 +227,7 @@ func (m *Model) setSection(section usersync.Section, enabled bool) tea.Cmd {
 	}
 }
 
-func (m *Model) synchronize(selected operation, force bool) tea.Cmd {
+func (m *Model) synchronize(selected operation, force, acceptPermissions bool) tea.Cmd {
 	manager := m.manager
 	ctx, cancel := m.timeoutContext(operationTimeout)
 	return func() tea.Msg {
@@ -233,7 +237,7 @@ func (m *Model) synchronize(selected operation, force bool) tea.Cmd {
 		if selected == operationPush {
 			result, err = manager.Push(ctx, force)
 		} else {
-			result, err = manager.Pull(ctx, force)
+			result, err = manager.Pull(ctx, force, acceptPermissions)
 		}
 		return syncMsg{operation: selected, force: force, result: result, err: err}
 	}

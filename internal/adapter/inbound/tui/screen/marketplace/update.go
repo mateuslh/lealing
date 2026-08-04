@@ -12,6 +12,7 @@ import (
 	confirmationscreen "github.com/mateuslh/lealing/internal/adapter/inbound/tui/screen/confirmation"
 	"github.com/mateuslh/lealing/internal/core/domain"
 	coremarket "github.com/mateuslh/lealing/internal/core/marketplace"
+	"github.com/mateuslh/lealing/internal/core/toolinstall"
 )
 
 var errNotConfigured = errors.New("marketplace não configurado")
@@ -66,6 +67,10 @@ func (m *Model) Update(message tea.Msg) (tui.Screen, tea.Cmd) {
 				m.err, m.success = nil, false
 				m.message = "a versão mais recente já está instalada"
 				return m, nil
+			}
+			var escalation *toolinstall.PermissionEscalationError
+			if errors.As(message.err, &escalation) {
+				return m.confirmPermissionEscalation(message.ref, escalation)
 			}
 			m.err, m.message = message.err, ""
 			return m, nil
@@ -261,8 +266,52 @@ func (m *Model) confirmInstall() (tui.Screen, tea.Cmd) {
 	reference := listing.Ref()
 	return m, tui.Navigate(confirmationscreen.New(m.deps, tool, func() tea.Cmd {
 		m.installing, m.err, m.message = reference, nil, ""
-		return m.install(reference)
+		return m.install(reference, false)
 	}))
+}
+
+// confirmPermissionEscalation é o segundo diálogo, mostrado só quando a
+// engine recusou a atualização porque a versão nova pede permissão que a
+// versão ativa não tinha. O caso comum (instalação nova ou atualização sem
+// ampliação de permissão) nunca passa por aqui — um único diálogo já basta.
+func (m *Model) confirmPermissionEscalation(ref string, escalation *toolinstall.PermissionEscalationError) (tui.Screen, tea.Cmd) {
+	tool := domain.Tool{
+		ID: domain.ToolID("marketplace-permission-" + ref), Name: "Conceder novas permissões?",
+		Detail: permissionEscalationDetail(escalation), Risk: domain.RiskDestructive,
+	}
+	return m, tui.Navigate(confirmationscreen.New(m.deps, tool, func() tea.Cmd {
+		m.installing, m.err, m.message = ref, nil, ""
+		return m.install(ref, true)
+	}))
+}
+
+func permissionEscalationDetail(escalation *toolinstall.PermissionEscalationError) string {
+	var parts []string
+	for _, item := range escalation.Escalations {
+		parts = append(parts, fmt.Sprintf("%s pede %s", item.ID, addedPermissionsLabel(item.Added)))
+	}
+	return "Esta atualização amplia o que a tool pode fazer em relação à versão instalada: " +
+		strings.Join(parts, "; ") + ". A versão ativa continua no lugar até você aprovar."
+}
+
+func addedPermissionsLabel(added toolinstall.ToolPermissions) string {
+	var parts []string
+	if len(added.ReadPaths) > 0 || len(added.WritePaths) > 0 {
+		parts = append(parts, permissionLabel(len(added.ReadPaths), len(added.WritePaths)))
+	}
+	if added.Network {
+		parts = append(parts, "acesso à rede")
+	}
+	if added.Subprocess {
+		parts = append(parts, "subprocessos")
+	}
+	if added.WorkingDir != "" {
+		parts = append(parts, "diretório de trabalho ("+added.WorkingDir+")")
+	}
+	if len(parts) == 0 {
+		return "novas permissões"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m *Model) handleSearch(key tea.KeyMsg) (tui.Screen, tea.Cmd) {

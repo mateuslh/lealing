@@ -146,7 +146,7 @@ func (l *LocalState) Collect(ctx context.Context) (State, error) {
 // Origens e tools formam uma única intenção declarativa: as origens são
 // resolvidas primeiro, todos os pacotes são preparados e o conjunto instalado
 // só é trocado quando a reprodução inteira pode terminar.
-func (l *LocalState) Apply(ctx context.Context, state State, selection Selection) (Applied, error) {
+func (l *LocalState) Apply(ctx context.Context, state State, selection Selection, acceptPermissionEscalation bool) (Applied, error) {
 	applied := Applied{}
 
 	var nextSources *marketplace.SourceState
@@ -170,7 +170,9 @@ func (l *LocalState) Apply(ctx context.Context, state State, selection Selection
 				return applied, err
 			}
 		} else {
-			request := marketplace.StateReconcileRequest{Sources: nextSources}
+			request := marketplace.StateReconcileRequest{
+				Sources: nextSources, AcceptPermissionEscalation: acceptPermissionEscalation,
+			}
 			if selection.Enabled(SectionTools) {
 				request.ExactTools = true
 				request.Tools = make([]marketplace.DesiredTool, 0, len(state.Tools))

@@ -46,6 +46,7 @@ func run() error {
 		install     = flag.String("tool-install", "", "instala pelo ID do marketplace ou por um diretório local")
 		updateTool  = flag.String("tool-update", "", "atualiza pelo ID do marketplace ou por um diretório local")
 		checksum    = flag.String("tool-checksum", "", "SHA-256 esperado para -tool-install")
+		acceptPerms = flag.Bool("accept-permissions", false, "com -tool-install/-tool-update, aprova permissão nova que a versão ativa não tinha")
 		remove      = flag.String("tool-remove", "", "remove uma tool instalada, preservando-a para recuperação")
 		enableTool  = flag.String("tool-enable", "", "ativa uma tool instalada")
 		disableTool = flag.String("tool-disable", "", "desativa uma tool sem desinstalá-la")
@@ -135,7 +136,8 @@ func run() error {
 		}
 		return runToolCommand(context.Background(), bootstrap.ToolManager(), bootstrap.ToolManagement(), bootstrap.MarketplaceManager(version, *marketURL), os.Stdout, toolCommand{
 			list: *listTools, marketplace: *market, install: source, checksum: *checksum,
-			remove: *remove, enable: *enableTool, disable: *disableTool, rollback: *rollback,
+			acceptPermissions: *acceptPerms,
+			remove:            *remove, enable: *enableTool, disable: *disableTool, rollback: *rollback,
 			sources: *sources, sourceAdd: *sourceAdd, sourceName: *sourceName,
 			sourceRemove: *sourceDrop, sourceEnable: *sourceOn, sourceDisable: *sourceOff,
 		})
@@ -177,6 +179,10 @@ func run() error {
 type toolCommand struct {
 	list, marketplace bool
 	install, checksum string
+	// acceptPermissions repete, na CLI, a aprovação explícita que a TUI pede
+	// num segundo diálogo quando -tool-install/-tool-update pede permissão
+	// que a versão ativa não tinha.
+	acceptPermissions bool
 	remove, rollback  string
 	enable, disable   string
 
@@ -321,8 +327,12 @@ func runToolCommand(
 			return statErr
 		}
 		if os.IsNotExist(statErr) && command.checksum == "" {
-			installed, err := market.Install(ctx, command.install)
+			installed, err := market.Install(ctx, command.install, marketplace.InstallOptions{PermissionsAccepted: command.acceptPermissions})
 			if err != nil {
+				var escalation *toolinstall.PermissionEscalationError
+				if errors.As(err, &escalation) {
+					return fmt.Errorf("%w; repita com -accept-permissions para conceder", escalation)
+				}
 				return err
 			}
 			_, err = fmt.Fprintf(output, "%s@%s instalada do marketplace em %s (sha256 %s)\n",
@@ -465,6 +475,10 @@ func runSyncCommand(
 			return fmt.Errorf(
 				"o outro lado mudou desde a última sincronização; repita com -force para sobrescrever")
 		}
+		var escalation *toolinstall.PermissionEscalationError
+		if errors.As(err, &escalation) {
+			return fmt.Errorf("%w; repita com -force para conceder", escalation)
+		}
 		if err != nil {
 			return err
 		}
@@ -487,5 +501,8 @@ func syncTransfer(ctx context.Context, manager usersync.Manager, command syncCom
 	if command.push {
 		return manager.Push(ctx, command.force)
 	}
-	return manager.Pull(ctx, command.force)
+	// -force já é o sinal de "sei o que estou fazendo" que a CLI usa para
+	// conflito de revisão; reaproveitá-lo para aprovar permissão nova evita
+	// uma segunda flag para o mesmo gesto numa ferramenta não interativa.
+	return manager.Pull(ctx, command.force, command.force)
 }

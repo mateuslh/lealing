@@ -23,6 +23,11 @@ type StateReconcileRequest struct {
 	Sources    *SourceState
 	Tools      []DesiredTool
 	ExactTools bool
+	// AcceptPermissionEscalation sinaliza que o usuário já viu e aprovou a
+	// ampliação de permissão de toda tool que esta reconciliação atualiza.
+	// Sem essa aprovação, ReconcileState recusa com
+	// *toolinstall.PermissionEscalationError e não muda nada em disco.
+	AcceptPermissionEscalation bool
 }
 
 type StateReconciliation struct {
@@ -70,7 +75,7 @@ func (s *Service) reconcileState(ctx context.Context, request StateReconcileRequ
 	if err != nil {
 		return StateReconciliation{}, err
 	}
-	requests, cleanups, err := s.prepareReconciliation(ctx, desired, currentTools, nextOrigins)
+	requests, cleanups, err := s.prepareReconciliation(ctx, desired, currentTools, nextOrigins, request.AcceptPermissionEscalation)
 	if err != nil {
 		return StateReconciliation{}, err
 	}
@@ -192,6 +197,7 @@ func (s *Service) prepareReconciliation(
 	desired []DesiredTool,
 	current []toolinstall.Installed,
 	origins []Origin,
+	permissionsAccepted bool,
 ) ([]toolinstall.InstallRequest, []func() error, error) {
 	active := make(map[string]toolinstall.Installed, len(current))
 	for _, item := range current {
@@ -245,16 +251,17 @@ func (s *Service) prepareReconciliation(
 			return fail(prepareErr)
 		}
 		cleanups = append(cleanups, prepared.Cleanup)
-		requests = append(requests, installRequest(entry, prepared.Directory))
+		requests = append(requests, installRequest(entry, prepared.Directory, permissionsAccepted))
 	}
 	sort.Slice(requests, func(i, j int) bool { return requests[i].ExpectedID < requests[j].ExpectedID })
 	return requests, cleanups, nil
 }
 
-func installRequest(entry Entry, sourceDir string) toolinstall.InstallRequest {
+func installRequest(entry Entry, sourceDir string, permissionsAccepted bool) toolinstall.InstallRequest {
 	return toolinstall.InstallRequest{
 		Host: entry.Origin.Name, SourceDir: sourceDir,
 		ExpectedID: entry.ID, ExpectedVersion: entry.Version,
+		PermissionsAccepted: permissionsAccepted,
 		ExpectedManifest: &toolinstall.ManifestExpectation{
 			ID: entry.ID, Version: entry.Version, Name: entry.Name, Summary: entry.Summary,
 			Detail: entry.Detail, Category: entry.Category, Risk: entry.Risk, Glyph: entry.Glyph,
